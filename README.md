@@ -4,7 +4,8 @@ An open-source, local-first **desktop agent for everyday office work** — built
 Rust, provider-neutral, with every action explained before it happens and
 reversible after.
 
-> Status: **pre-implementation.** This repo currently holds research and strategy.
+> Status: **pre-implementation.** This repo holds research, strategy, and a
+> complete implementation plan in [`docs/plan/`](docs/plan/00-README.md).
 
 ## The thesis
 
@@ -22,6 +23,7 @@ organisations, **>90% had nothing to do with software development**.
 | [`docs/01-landscape.md`](docs/01-landscape.md) | What exists in open source (Aug 2026), assessed — goose, Codex, opencode, Kiro, LangChain, Rig — plus the standards (MCP, ACP, Agent Skills) and the provider-policy constraint that shapes the product. |
 | [`docs/02-building-blocks.md`](docs/02-building-blocks.md) | Reference architecture, layer by layer, with build / borrow / buy calls. |
 | [`docs/03-vision.md`](docs/03-vision.md) | Positioning, differentiators, wedge, moat, roadmap, monetisation, failure modes. |
+| [`docs/plan/00-README.md`](docs/plan/00-README.md) | **Implementation plan** (Sept 2026): scope, locked decisions, the hardest problems and their solutions, architecture, ordered task list, and test strategy. Start here to build. |
 
 ## Shape of the thing
 
