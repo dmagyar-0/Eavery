@@ -25,12 +25,15 @@ they were written later and with verified technical facts (September 2026).
 | 09 | `09-documents-playbooks.md` | Document MCP server (docx/xlsx/pdf/pptx) and Agent Skills as Playbooks | M6 |
 | 10 | `10-task-breakdown.md` | Ordered task list with IDs, dependencies, and acceptance criteria | Every day |
 | 11 | `11-testing-ci.md` | Test strategy, the fake ACP agent, CI workflow | M0 onward |
+| — | `REVIEW-2026-09.md` | Independent review: verified claims, strategic issues, spec bugs found and fixed in these documents, the S0 spikes | Before S0 |
 
 ## Working rules (non-negotiable)
 
 1. **Work the task list in order.** `10-task-breakdown.md` is ordered by
    dependency. Do not start a task whose dependencies are not marked done.
    Mark each task done in that file with the commit hash when finished.
+   The S0 spikes come first and have pass/fail lines; a failed spike is a
+   founder decision, not something to code around.
 2. **One task, one commit.** Small commits with the task ID in the subject,
    for example `M2-T03: journal: create checkpoint before turn`.
 3. **`cargo check` after every file you touch. `cargo test` before every commit.**
@@ -83,3 +86,6 @@ they were written later and with verified technical facts (September 2026).
 - **Plan gate**: the step between the user's request and execution where the
   engine produces a plan and the user approves it.
 - **Connector**: an MCP server. **Playbook**: an Agent Skill folder with `SKILL.md`.
+- **Concurrency model**: at most one Turn runs per Project at a time. Several
+  Projects may be open at once, each with its own engine process, Journal,
+  and permission queue. `core://event` `seq` is global across Projects.

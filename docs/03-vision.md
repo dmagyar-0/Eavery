@@ -31,8 +31,9 @@ an actual office worker, all three are disqualifying.
 | Audience | knowledge workers | early adopters | developers | **office workers** |
 | Model | Anthropic only | BYO key | BYO key | **BYO agent, key, or local** |
 | Open source | no | yes | yes | **yes** |
-| Onboarding | excellent | poor (API keys) | N/A | **BYO-agent: no key** |
-| Undo | limited | limited | git (visible) | **git (invisible)** |
+| Onboarding | excellent | poor (API keys) | N/A | **BYO-agent: no key** (Codex terminal-free; Claude/Gemini need Node) |
+| Undo | tool edits only, 30 days (`/rewind`) | limited | git (visible) | **whole folder, incl. user edits, forever (invisible git)** |
+| Where data goes | Anthropic | model vendor | model vendor | **model vendor, or nowhere (Ollama)** |
 | Supervision | permissions | permissions | diffs | **plain-English plan gate** |
 | Runtime | cloud+desktop | Electron/Python | CLI | **Rust/Tauri, ~5MB** |
 
@@ -41,22 +42,10 @@ AI you already pay for.*
 
 ## 4. The four differentiators
 
-Everything else is table stakes. These are the bets.
+Everything else is table stakes. These are the bets, in order of how much of
+the moat they carry (see `docs/plan/REVIEW-2026-09.md` §3).
 
-### 4.1 No API key — use the AI you already have
-Anthropic's ban on third-party subscription OAuth (Jan–Apr 2026) broke the
-onboarding of every competitor in this category; the standard OSS answer is now
-"get comfortable managing API keys," which for the target user is a wall.
-
-Eavery's answer: **be an ACP client, not a harness.** Drive the user's own,
-officially installed, officially authenticated Claude Code or Codex CLI. Their
-subscription, their ToU, no proxying, no grey zone, no second bill.
-
-This turns the category's biggest constraint into the best first-run experience in
-the category. It is also the hardest thing for a closed vendor to copy, because
-Anthropic will not ship "works great with ChatGPT."
-
-### 4.2 Invisible git — undo anything
+### 4.1 Invisible git — undo anything
 Every project is a git repo the user never sees as git. Automatic checkpoint
 before every action; one Undo button; nothing ever truly lost.
 
@@ -65,7 +54,13 @@ reversible. This is the cheapest trust available — the hard engineering was do
 by someone else in 2005 — and it is the precondition for anyone letting an agent
 near a document that matters.
 
-### 4.3 The plan gate — supervision without literacy
+Be precise about the comparison: Claude Code and Cowork have `/rewind`
+checkpoints, but they cover only edits made through the agent's own edit tools,
+not shell commands and not the user's own edits, and they expire after 30 days.
+Eavery's Journal covers the whole folder, whoever changed it, for as long as the
+user wants.
+
+### 4.2 The plan gate — supervision without literacy
 Adapted from Kiro's spec-driven pattern. Plan in plain English → review and edit →
 execute → digest. A non-technical user cannot audit a diff, but they can absolutely
 read "I'll pull the three regional sheets, reconcile against the ledger, and draft
@@ -75,7 +70,7 @@ Critically, permission friction should track **irreversibility**, not action typ
 near-silent on checkpointed local edits, loud on anything outbound or destructive.
 Products that prompt uniformly train users to click "allow all."
 
-### 4.4 One engine, two vocabularies
+### 4.3 One engine, two vocabularies
 Everyday mode and Developer mode are the same session with different words —
 Project/Documents/checkpoint/Undo/Connector/Playbook vs
 repo/files/commit/revert/MCP/skill. Hidden, never removed; one toggle reveals
@@ -86,13 +81,40 @@ person evaluates it, the non-technical team uses it. A product that serves only
 one of them dies at the boundary. Eavery is the only one that can be handed
 sideways across that boundary without switching tools.
 
+### 4.4 No API key — use the AI you already have
+Anthropic's ban on third-party subscription OAuth (Jan–Apr 2026) broke the
+onboarding of every competitor in this category; the standard OSS answer is now
+"get comfortable managing API keys," which for the target user is a wall.
+
+Eavery's answer: **be an ACP client, not a harness.** Drive the user's own,
+officially installed, officially authenticated Codex CLI, Claude Code, or Gemini
+CLI. Their subscription, their sign-in, no proxying, no second bill.
+
+Three honest caveats, all from `01-landscape.md` §4:
+- It is **table stakes, not a moat**: goose already ships the same
+  subscription sign-in through its own ACP providers.
+- The **Claude route is tolerated, not guaranteed**. The adapter is built on
+  the Agent SDK, which Anthropic announced it would bill separately from May
+  2026 and then paused. Codex (ChatGPT sign-in) is the primary zero-key engine;
+  Claude and Gemini are supported but must never be load-bearing.
+- **The target user does not have these CLIs installed.** The path is only
+  "no key" if Eavery installs the CLI itself. Codex CLI and `codex-acp` ship
+  native binaries, so Eavery downloads them and launches the browser sign-in
+  from inside the app; that is the one genuinely terminal-free zero-key path in
+  v1. The Claude and Gemini adapters need Node and are labelled as such.
+
 ## 5. Wedge: pick one job, be undeniable at it
 
 Horizontal "AI for all office work" is unwinnable against Anthropic's distribution.
 Win a beachhead where the work is **repetitive, multi-file, deadline-driven, and
 currently done by hand.**
 
-Recommended wedge: **finance and operations reporting.**
+Recommended wedge: **finance and operations reporting**, narrowed for v1 to
+the tasks the v1 document Connector can actually do: find-and-replace across
+documents, reconciling sheets, summarising folders, extracting PDF tables.
+Refreshing a monthly report with charts and decks needs chart-aware `.xlsx`
+editing and `.pptx` writing, which v1 does not have. Do not demo what the
+tools cannot deliver.
 
 - Multi-source, multi-step, monthly cadence — exactly the shape agents are good at.
 - The artifacts are `.xlsx` and `.pptx`, where deterministic tooling beats
@@ -118,7 +140,11 @@ deliberately so.
    durable brand asset. It is also fragile — one incident spends it entirely.
 3. **Local-first + open source.** Structurally uncopyable by Anthropic and OpenAI,
    whose businesses require inference. Buys the regulated verticals — legal,
-   healthcare, finance, public sector, EU data residency.
+   healthcare, finance, public sector, EU data residency. Be honest that this
+   is only true on the Ollama path: on every other engine, every file the agent
+   reads is sent to the model vendor, and the plan card must say so. Local
+   models are weakest at exactly the multi-file office work the wedge needs,
+   so the regulated-vertical story is a Phase 2 claim, not a v1 one.
 4. **Provider neutrality.** Also structurally uncopyable by the model vendors.
 5. **Community.** Contributors write Playbooks and Connectors in English, not Rust
    — a far larger contributor pool than a normal OSS project. Design for this
@@ -174,13 +200,19 @@ Never paywall: model access, connector count, local usage, or undo.
   products' worth of ecosystem for nothing.
 - **Staying horizontal.** No wedge means no reference customers, no proof, no
   reason to switch.
+- **Building for three months before a real user touches it.** The plan's
+  first usability test was at week 13. Sit with three to five finance or ops
+  people now and watch them attempt a month-end task with Claude Code or
+  Cowork on their own files; that establishes whether the engines can do the
+  work at all, which nothing in this repo yet shows.
 
 ## 10. Open questions
 
-1. **Is BYO-agent-over-ACP durable?** It is legitimate today — the user's own
-   client authenticates itself. Worth watching whether vendors move against
-   ACP-driving too. Ollama and BYO-key are the hedge; do not let it become the
-   only path.
+1. **Is BYO-agent-over-ACP durable?** For Claude, Anthropic has already
+   announced (May 2026) and paused (June 2026) a move to separate billing for
+   ACP and Agent SDK use; assume it returns. For Codex and Gemini there is no
+   such announcement. Ollama and BYO-key are the hedge; do not let any single
+   zero-key engine become the only path.
 2. **Which wedge?** Finance/ops is the recommendation, but legal review and
    research/consulting are plausible. Decide from access to real users, not from
    analysis — whichever vertical you can get five design partners in this month.

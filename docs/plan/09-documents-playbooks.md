@@ -22,10 +22,12 @@ open-source gift on its own.
 | `pptx_read_text` | `{path}` | text per slide with slide numbers and notes | `zip`+`quick-xml` on `ppt/slides/slide*.xml` |
 | `doc_info` | `{path}` | type, size, page/sheet/slide count, last modified | mixed |
 
-Every write tool: writes to `<path>.eavery-tmp`, re-opens the result with the
-reader crate to validate, then renames over the original. On validation failure
-it deletes the temp file and returns an error `"The change would have damaged
-the file, so nothing was written."`.
+Every write tool: writes to `<path>.eavery-tmp` (a sibling file; this suffix
+is in the Journal's exclude list as `*.eavery-tmp`, `05` §3), re-opens the
+result with the reader crate to validate, then renames over the original. On
+validation failure it deletes the temp file and returns an error `"The change
+would have damaged the file, so nothing was written."`. On startup the server
+deletes any stale `*.eavery-tmp` under `--root` left by a crash.
 
 Every tool: rejects paths outside the directory passed as `--root` (Eavery
 passes the Project root) with a clear error. Follows no symlinks outside root.
@@ -121,13 +123,17 @@ Project folder.
 
 ### 2.3 Bundled Playbooks for v1 (five, wedge-aligned)
 Written in plain English, each under 150 lines, each tested once manually
-with two engines:
+with two engines. Each is scoped to what the v1 tools in §1.1 can actually do
+(`03-vision.md` §5): text and cell values, not charts, pivots, conditional
+formatting, or slides. A Playbook must say so in its own limits section, so
+the engine reports "I can't update the chart" rather than trying.
 
-1. `monthly-report-refresh` — update a Word report from a spreadsheet's new
-   month column; list every number changed.
+1. `monthly-report-refresh` — update the numbers and sentences in a Word
+   report from a spreadsheet's new month column; list every number changed.
+   Explicitly out of scope in v1: charts, embedded workbooks, and `.pptx`.
 2. `spreadsheet-reconcile` — compare two sheets on a key column; produce a
    third sheet of differences; never modify the sources.
-3. `find-and-replace-across-documents` — the M5 exit-test task, generalised.
+3. `find-and-replace-across-documents` — the M6 exit-test task, generalised.
 4. `summarise-folder` — one-page summary of every document in a folder into
    `SUMMARY.md` (read-only on sources).
 5. `pdf-to-spreadsheet-table` — extract tables from PDFs into an `.xlsx`,

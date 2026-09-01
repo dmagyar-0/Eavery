@@ -71,7 +71,7 @@ chrono = { version = "0.4", features = ["serde"] }
 git2 = { version = "0.20", default-features = false, features = ["vendored-libgit2"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 agent-client-protocol = "2"
-agent-client-protocol-schema = "2"
+agent-client-protocol-schema = "1"   # the schema crate is on a 1.x line (1.7.0, Aug 2026); 2.x does not exist
 rmcp = { version = "0.8", features = ["server", "transport-io", "macros"] }
 clap = { version = "4", features = ["derive"] }
 directories = "6"
@@ -162,6 +162,21 @@ pub struct Plan {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PlanStep { pub text: String, pub done: bool }
+
+/// Wire shape of the ```eavery-plan``` JSON block. The prompt asks for `steps`
+/// as plain strings, so this must NOT be `Plan` (whose `steps` is `Vec<PlanStep>`;
+/// a type mismatch is a serde error, and every valid plan would fall back to raw
+/// markdown). Parse into `PlanJson`, then convert with `Plan::from(PlanJson)`.
+#[derive(Clone, Debug, Deserialize, Default)]
+#[serde(default)]
+pub struct PlanJson {
+    pub summary: String,
+    pub steps: Vec<String>,
+    pub files_touched: Vec<String>,
+    pub outbound: Vec<String>,
+    pub irreversible: Vec<String>,
+    pub will_not_do: Vec<String>,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -257,18 +272,26 @@ pub struct Digest {
 
 ```rust
 // crates/eavery-core/src/engine.rs
+//
+// All methods take `&self`. `prompt` blocks for the whole turn, and `cancel`
+// must be callable from another task while it is blocked; with `&mut self`
+// the borrow checker forbids exactly that. Implementations keep their mutable
+// state behind channels or a Mutex (the ACP crate already drives the
+// connection from a command channel, see 04-acp-engines.md §5).
 #[async_trait::async_trait]
 pub trait Engine: Send + Sync {
     /// Spawn the process, run initialize, return capabilities.
-    async fn start(&mut self) -> Result<EngineInfo, EngineError>;
+    async fn start(&self) -> Result<EngineInfo, EngineError>;
     /// session/new (or session/load if engine_session_id is Some and supported).
-    async fn open_session(&mut self, cwd: &Path, mcp: &[McpServerSpec], resume: Option<&str>) -> Result<String, EngineError>;
-    async fn set_mode(&mut self, session: &str, mode_id: &str) -> Result<(), EngineError>;
-    /// Sends session/prompt. Streams CoreEvents to `tx` until the prompt returns.
+    async fn open_session(&self, cwd: &Path, mcp: &[McpServerSpec], resume: Option<&str>) -> Result<String, EngineError>;
+    async fn set_mode(&self, session: &str, mode_id: &str) -> Result<(), EngineError>;
+    /// Sends session/prompt. Streams RawAgentEvents to `tx` until the prompt returns
+    /// (eavery-core::turn converts them to CoreEvents).
     /// `permission` is called for every session/request_permission and must answer.
-    async fn prompt(&mut self, session: &str, text: &str, tx: EventSink, permission: PermissionHandler) -> Result<StopReason, EngineError>;
-    async fn cancel(&mut self, session: &str) -> Result<(), EngineError>;
-    async fn shutdown(&mut self);
+    async fn prompt(&self, session: &str, text: &str, tx: EventSink, permission: PermissionHandler) -> Result<StopReason, EngineError>;
+    /// Safe to call while `prompt` is in flight; the outstanding `prompt` then returns `Cancelled`.
+    async fn cancel(&self, session: &str) -> Result<(), EngineError>;
+    async fn shutdown(&self);
 }
 
 pub type EventSink = tokio::sync::mpsc::UnboundedSender<RawAgentEvent>;
@@ -308,6 +331,11 @@ Done
 Cancel is allowed in Planning and Executing. A cancel in Executing still takes
 the post-turn checkpoint so the partial result is undoable.
 
+Concurrency (see `02-challenges.md` C13): one turn per Project at a time;
+`start_turn` on a Project with a running turn returns an error. Several
+Projects may run turns concurrently, each with its own engine process.
+`restore_checkpoint` is refused while a turn is running on that Project.
+
 Everyday mode can offer "Just do it" for requests the policy classifies as
 read-only (the plan phase found no `files_touched`, no `outbound`). That is a
 UI shortcut, not a bypass: the plan phase still runs.
@@ -340,7 +368,10 @@ Commands (`#[tauri::command]`, all return `Result<T, AppError>` serialised as
 | `list_connectors` / `upsert_connector` / `remove_connector` | | MCP server specs |
 | `list_playbooks` | `{ project_id }` | `Playbook[]` |
 | `get_settings` / `set_settings` | | `Settings` (mode, engine defaults, keys stored in OS keychain via `keyring` crate) |
-| `run_health_check` | `{ engine_id }` | `EngineStatus` |
+| `run_health_check` | `{ engine_id, deep?: bool }` | `EngineStatus` (`deep` sends a real prompt; default only `initialize` + `session/new`) |
+| `install_engine` | `{ engine_id }` | streams progress events; downloads goose, Codex CLI, or `codex-acp` per `08-onboarding-packaging.md` §4 |
+| `sign_in_engine` | `{ engine_id }` | launches the engine's own sign-in (`codex login`) and reports when it completes |
+| `journal_size` | `{ project_id }` | bytes on disk of the Journal |
 
 Event: `app.emit("core://event", CoreEvent)` for every event. The payload
 includes `seq: u64` so the UI can detect gaps and re-fetch via `list_events`.
@@ -354,6 +385,8 @@ Use the `directories` crate: `ProjectDirs::from("dev", "eavery", "Eavery")`.
 ├── eavery.sqlite                # projects, sessions, turns, events, audit, settings
 ├── journals/<project-id>/       # bare-ish git dir with core.worktree = project root
 ├── engines/goose/<version>/     # downloaded goose binary (BYO-key / local path)
+├── engines/codex/<version>/     # downloaded Codex CLI (zero-key ChatGPT path)
+├── engines/codex-acp/<version>/ # downloaded ACP adapter for Codex
 ├── connectors.json              # MCP server specs (user-added)
 └── logs/eavery.log              # tracing output, rotated
 <config_dir>/                    # user-visible settings.json (mode, default engine)

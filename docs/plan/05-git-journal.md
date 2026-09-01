@@ -9,8 +9,11 @@ correct before it is fast, and it must never be skippable.
   `<data_dir>/journals/<project-id>/`. Its **work tree** is the Project root.
   The Project folder never contains `.git`.
 - Checkpoints are commits on a single branch `eavery`. There is no remote.
-- Restore is forward-only: a restore creates a new commit whose tree equals the
-  target checkpoint's tree, then checks that tree out into the work tree.
+- Restore is forward-only, and always checkpoints first (D16): a restore first
+  commits the current work tree if it differs from HEAD (so the user's own
+  edits since the last checkpoint are kept and are themselves restorable),
+  then creates a new commit whose tree equals the target checkpoint's tree,
+  then checks that tree out into the work tree.
 - Author for every commit: `Eavery <eavery@localhost>`. Message is the label.
 - The index is rebuilt from the work tree on every checkpoint (`add_all` with
   the exclude rules). Eavery never relies on a stale index.
@@ -37,13 +40,18 @@ impl Journal {
     /// Files that differ between a checkpoint and the current work tree (uncommitted state).
     pub fn diff_worktree(&self, from: &CheckpointId) -> Result<ChangeSet, JournalError>;
 
-    /// Forward-only restore. Writes files from `target` into the work tree, deletes files that
-    /// did not exist in `target` (only files the Journal tracks), then commits with kind Restore.
+    /// Forward-only restore. First `checkpoint("Before going back", Manual, force = false)` so the
+    /// work tree's current state (including the user's hand edits) is committed; then writes files
+    /// from `target` into the work tree, deletes files that did not exist in `target` (only files the
+    /// Journal tracks), then commits with kind Restore. Refused while a turn is running (C13).
     /// Returns the new checkpoint and the list of files that could not be written (locked).
     pub fn restore(&self, target: &CheckpointId) -> Result<(Checkpoint, Vec<PathBuf>), JournalError>;
 
-    /// Files skipped by the size guard or excludes, for the "Not protected" panel.
+    /// Files skipped by the size guard, excludes, or cloud-placeholder status, for the "Not protected" panel.
     pub fn unprotected(&self) -> Result<Vec<Unprotected>, JournalError>;
+
+    /// Bytes on disk under the git dir, for Settings and the Developer Home screen (C12).
+    pub fn size_on_disk(&self) -> Result<u64, JournalError>;
 }
 ```
 
@@ -79,10 +87,19 @@ desktop.ini
 *.tmp
 *.crdownload
 *.partial
+*.eavery-tmp
 node_modules/
 .git/
-.eavery-tmp/
+.claude/
+.codex/
+.goose/
+.gemini/
 ```
+
+`*.eavery-tmp` is the docs Connector's temp-file suffix (`09` §1.1 writes
+`<path>.eavery-tmp` and renames over the original). `.claude/`, `.codex/`,
+`.goose/`, `.gemini/` are engine state folders; checkpointing them is
+harmless but restoring them would rewind the engine's own memory.
 
 Checkpoint:
 
@@ -108,9 +125,15 @@ Store `kind` in the commit message trailer: `Eavery-Kind: pre_turn` and
 `Eavery-Turn: <turn-id>`. `list` parses trailers back. Do not depend on the
 SQLite `checkpoints` table for correctness; it is a cache for the UI.
 
-Restore (forward-only), file by file so locked files do not abort the rest:
+Restore (forward-only), file by file so locked files do not abort the rest.
+The pre-restore checkpoint is what makes `diff_tree_to_tree(HEAD, target)`
+correct: without it, a file the user edited by hand since the last checkpoint
+is either overwritten (lost) or left behind, depending on whether it appears
+in the diff.
 
 ```rust
+// D16: bring HEAD up to the work tree first. Not forced: if nothing changed, HEAD is reused.
+self.checkpoint("Before going back", CheckpointKind::Manual, false)?;
 let target_tree = repo.find_commit(oid_of(target))?.tree()?;
 let head_tree = repo.head()?.peel_to_tree()?;
 let diff = repo.diff_tree_to_tree(Some(&head_tree), Some(&target_tree), None)?;
@@ -143,9 +166,12 @@ the added/changed/removed lists.
 | Guard | Value | Behaviour |
 |---|---|---|
 | `MAX_FILE_BYTES` | 50 MB | file skipped, listed in "Not protected" |
+| Cloud placeholder | Windows `FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS` or `FILE_ATTRIBUTE_OFFLINE`; macOS `.<name>.icloud` stub; Dropbox online-only xattr | file skipped without reading it (reading would hydrate it from the cloud), listed in "Not protected" with the reason "Not downloaded yet" |
 | `WARN_TOTAL_BYTES` | 2 GB | at `open_project`, UI asks user to pick a subfolder; can proceed |
 | `MAX_FILES` | 200,000 | at `open_project`, refuse; suggest a subfolder |
 | Checkpoint time | > 10 s | log a warning with the slowest paths |
+| First checkpoint | any size | runs on a blocking thread with a progress callback (files hashed / total) and a Cancel; `open_project` returns only when it finishes or is cancelled |
+| Loose objects | > 5,000 | pack them (`Odb` / packbuilder) in the background; never prune (C12) |
 
 ## 5. Ordering guarantees in a turn
 
@@ -188,5 +214,13 @@ Use `tempfile::tempdir()` for both the project root and the data dir.
 8. Simulated lock (Unix: make a file read-only in a read-only dir) → restore
    returns it in the locked list and restores the others.
 9. Moving the project folder and reopening with the new path updates the work tree.
-10. Property test (optional, `proptest`): random sequences of write/delete/
+10. **Hand edit survives Undo (D16).** Checkpoint, edit `a.txt` by hand (no
+    checkpoint), restore an older checkpoint → `a.txt` has the older content,
+    and `list` contains a "Before going back" checkpoint whose tree holds the
+    hand-edited content; restoring it brings the hand edit back.
+11. A file created by hand after the last checkpoint is removed by a restore
+    to an earlier checkpoint only after being captured in the pre-restore
+    checkpoint (so it is recoverable).
+12. Engine state folders (`.claude/`, `.codex/`) are never tracked.
+13. Property test (optional, `proptest`): random sequences of write/delete/
     checkpoint/restore never lose a checkpointed tree.
