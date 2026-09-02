@@ -48,7 +48,7 @@ exit test runs in CI rather than living in a shell history.
 
 ## Anything surprising
 
-Two bugs the exit test found, both fixed in M0-T06:
+Three bugs the exit test found:
 
 - `Connection::shutdown` deadlocked against the task waiting on the child,
   which held the child's mutex across `wait()`. The child now belongs to the
@@ -56,6 +56,13 @@ Two bugs the exit test found, both fixed in M0-T06:
 - `session/update` notifications were dispatched on a task each, so two updates
   could be delivered in either order. An ordered stream is the entire product of
   that layer. They are now dispatched inline on the reader task.
+- The CLI printed the transcript from two independent writers — the event
+  printer and the permission handler — so the answer to a permission request
+  could appear above events the engine had sent before asking. One task now owns
+  the transcript, and both producers feed it. Pinned by
+  `the_transcript_is_in_order`.
+
+The first two were fixed in M0-T06, the third in M0-T07.
 
 ## Not yet verified
 

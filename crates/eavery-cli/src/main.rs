@@ -114,20 +114,21 @@ async fn prompt(args: PromptArgs) -> Result<ExitCode> {
         .context("opening a session")?;
     render::session_opened(&session);
 
-    let (tx, mut rx) = mpsc::unbounded_channel::<RawAgentEvent>();
-    let printer = tokio::spawn(async move {
-        while let Some(event) = rx.recv().await {
-            render::event(&event);
-        }
-    });
+    // One task owns the transcript. The engine's events and the permission
+    // handler's lines are two independent producers, and letting both write to
+    // stdout puts the transcript out of the order the engine sent it in.
+    let (event_tx, event_rx) = mpsc::unbounded_channel::<RawAgentEvent>();
+    let (line_tx, line_rx) = mpsc::unbounded_channel::<Line>();
+    let printer = tokio::spawn(transcript(event_rx, line_rx));
 
-    let handler = permission_handler(args.answer.clone());
-
+    let handler = permission_handler(args.answer.clone(), line_tx.clone());
     let stop = engine
-        .prompt(&session.session_id, &args.request, tx, handler)
+        .prompt(&session.session_id, &args.request, event_tx, handler)
         .await;
 
-    // The sink is dropped when `prompt` returns, so this ends on its own.
+    // Both producers are finished: the sink went with `prompt`, and so did the
+    // handler it held. Closing this last one ends the transcript task.
+    drop(line_tx);
     let _ = printer.await;
 
     let code = match stop {
@@ -167,6 +168,10 @@ fn launch_spec(args: &PromptArgs, cwd: &std::path::Path) -> Result<LaunchSpec> {
     if !script.exists() {
         bail!("no script at {}", script.display());
     }
+    // The engine runs in the project folder, so a path relative to where the
+    // user typed the command would resolve against the wrong directory.
+    let script =
+        std::fs::canonicalize(script).with_context(|| format!("resolving {}", script.display()))?;
 
     let mut spec = LaunchSpec::new("fake", fake_agent_path()?).cwd(cwd);
     spec.args.push("--script".to_owned());
@@ -191,18 +196,60 @@ fn fake_agent_path() -> Result<PathBuf> {
     Ok(PathBuf::from(name))
 }
 
+/// One line of the transcript.
+enum Line {
+    Say(String),
+    /// Print it, then say so, so a terminal question is on screen before the
+    /// answer is read.
+    Ask(String, tokio::sync::oneshot::Sender<()>),
+}
+
+/// The only writer of the event transcript.
+///
+/// `biased` is what does the work: the engine's events are already queued by
+/// the time the permission handler that follows them runs, so draining them
+/// first puts the transcript back in the engine's order.
+async fn transcript(
+    mut events: mpsc::UnboundedReceiver<RawAgentEvent>,
+    mut lines: mpsc::UnboundedReceiver<Line>,
+) {
+    let mut events_open = true;
+    let mut lines_open = true;
+    while events_open || lines_open {
+        tokio::select! {
+            biased;
+            event = events.recv(), if events_open => match event {
+                Some(event) => render::event(&event),
+                None => events_open = false,
+            },
+            line = lines.recv(), if lines_open => match line {
+                Some(Line::Say(text)) => println_flush(text),
+                Some(Line::Ask(text, printed)) => {
+                    println_flush(text);
+                    let _ = printed.send(());
+                }
+                None => lines_open = false,
+            },
+        }
+    }
+}
+
 /// Answers permission requests: from `--answer` when given, otherwise from the
 /// terminal.
-fn permission_handler(fixed: Option<String>) -> eavery_core::engine::PermissionHandler {
+fn permission_handler(
+    fixed: Option<String>,
+    lines: mpsc::UnboundedSender<Line>,
+) -> eavery_core::engine::PermissionHandler {
     Arc::new(move |view: PermissionView| {
         let fixed = fixed.clone();
+        let lines = lines.clone();
         Box::pin(async move {
             let decision = match fixed.as_deref() {
                 Some("allow") => Decision::AllowOnce,
                 Some("reject") => Decision::RejectOnce,
-                _ => ask_in_terminal(&view).await,
+                _ => ask_in_terminal(&view, &lines).await,
             };
-            render::permission_answered(&view, decision);
+            let _ = lines.send(Line::Say(render::permission_answered(&view, decision)));
             decision
         })
     })
@@ -210,15 +257,24 @@ fn permission_handler(fixed: Option<String>) -> eavery_core::engine::PermissionH
 
 /// Asks on the terminal. Reading a line blocks, so it runs on the blocking
 /// pool: the event stream keeps printing while the answer is pending.
-async fn ask_in_terminal(view: &PermissionView) -> Decision {
+async fn ask_in_terminal(view: &PermissionView, lines: &mpsc::UnboundedSender<Line>) -> Decision {
     if !std::io::stdin().is_terminal() {
         // Nobody is there to say yes. Saying it for them is exactly what must
         // never happen.
-        render::permission_unattended(view);
+        let _ = lines.send(Line::Say(render::permission_unattended(view)));
         return Decision::RejectOnce;
     }
 
-    render::permission_prompt(view);
+    // Wait for the question to reach the screen before reading the answer.
+    let (printed, on_screen) = tokio::sync::oneshot::channel();
+    if lines
+        .send(Line::Ask(render::permission_prompt(view), printed))
+        .is_err()
+    {
+        return Decision::RejectOnce;
+    }
+    let _ = on_screen.await;
+
     let answer = tokio::task::spawn_blocking(|| {
         let mut line = String::new();
         std::io::stdin().read_line(&mut line).map(|_| line)

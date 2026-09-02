@@ -4,8 +4,9 @@ An open-source, local-first **desktop agent for everyday office work** — built
 Rust, provider-neutral, with every action explained before it happens and
 reversible after.
 
-> Status: **pre-implementation.** This repo holds research, strategy, and a
-> complete implementation plan in [`docs/plan/`](docs/plan/00-README.md).
+> Status: **M0 done.** The Rust workspace, the scriptable ACP test agent, the
+> ACP client and the headless CLI are in and tested; the plan lives in
+> [`docs/plan/`](docs/plan/00-README.md) and the task list with it.
 
 ## The thesis
 
@@ -25,6 +26,31 @@ organisations, **>90% had nothing to do with software development**.
 | [`docs/03-vision.md`](docs/03-vision.md) | Positioning, differentiators, wedge, moat, roadmap, monetisation, failure modes. |
 | [`docs/plan/00-README.md`](docs/plan/00-README.md) | **Implementation plan** (Sept 2026): scope, locked decisions, the hardest problems and their solutions, architecture, ordered task list, and test strategy. Start here to build. |
 | [`docs/plan/REVIEW-2026-09.md`](docs/plan/REVIEW-2026-09.md) | Independent review of all of the above: verified claims, strategic issues, spec bugs, and the three spikes to run before committing to the build. |
+
+## Building it
+
+```sh
+cargo build --workspace
+cargo test --workspace
+
+# One prompt through the scriptable test agent, end to end.
+mkdir -p /tmp/demo && cargo run -p eavery-cli -- prompt --engine fake \
+  --script crates/eavery-core/tests/scripts/hello.json \
+  --cwd /tmp/demo "write some notes"
+```
+
+Progress is tracked in [`docs/plan/10-task-breakdown.md`](docs/plan/10-task-breakdown.md);
+anything where reality differed from the plan is in
+[`docs/plan/CHANGELOG-plan.md`](docs/plan/CHANGELOG-plan.md).
+
+| Crate | What it is |
+|---|---|
+| `eavery-core` | Domain model, the one event stream, the `Engine` contract. Depends on no engine. |
+| `eavery-acp` | ACP client: spawns an engine, maps its stream, answers its requests. |
+| `eavery-engines` | Engine table, discovery, health checks. Arrives in M1. |
+| `eavery-fake-agent` | A scriptable ACP agent. The primary test double. |
+| `eavery-cli` | Headless driver. Every core feature is built here before the GUI. |
+| `eavery-docs-mcp` | The document Connector. Arrives in M6. |
 
 ## Shape of the thing
 

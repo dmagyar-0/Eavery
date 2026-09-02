@@ -77,23 +77,26 @@ pub fn event(event: &RawAgentEvent) {
     }
 }
 
-pub fn permission_prompt(view: &PermissionView) {
-    println_flush(format!(
+// The permission lines are returned rather than printed: they go through the
+// same queue as the events, so the transcript stays in the engine's order.
+
+pub fn permission_prompt(view: &PermissionView) -> String {
+    format!(
         "ask      {} ({:?})\n           {}\n           [a]llow / [r]eject:",
         view.title, view.risk, view.explanation
-    ));
+    )
 }
 
-pub fn permission_unattended(view: &PermissionView) {
-    println_flush(format!(
+pub fn permission_unattended(view: &PermissionView) -> String {
+    format!(
         "ask      {} ({:?}) — rejected: no terminal to ask on. \
          Use --answer to decide up front.",
         view.title, view.risk
-    ));
+    )
 }
 
-pub fn permission_answered(view: &PermissionView, decision: Decision) {
-    println_flush(format!("answer   {:?} for {}", decision, view.title));
+pub fn permission_answered(view: &PermissionView, decision: Decision) -> String {
+    format!("answer   {:?} for {}", decision, view.title)
 }
 
 pub fn finished(stop: StopReason) {

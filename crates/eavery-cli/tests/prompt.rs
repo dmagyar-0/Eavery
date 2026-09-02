@@ -197,6 +197,35 @@ fn an_unattended_run_refuses_rather_than_assuming_consent() {
     assert!(printed.contains("answer   RejectOnce"), "{printed}");
 }
 
+/// The engine runs in the project folder, so a script path relative to where
+/// the user typed the command must be resolved before it is handed over. The
+/// shipped demo script is quoted as a relative path in the README.
+#[test]
+fn a_relative_script_path_resolves_against_the_callers_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().join("project");
+    std::fs::create_dir(&project).unwrap();
+
+    let output = cli(&[
+        "prompt",
+        "--script",
+        // Relative to the crate root, which is the working directory Cargo
+        // gives a test, and therefore the one the CLI inherits.
+        "../eavery-core/tests/scripts/hello.json",
+        "--cwd",
+        &project.to_string_lossy(),
+        "--answer",
+        "allow",
+        "write some notes",
+    ]);
+    let printed = stdout(&output);
+    assert!(output.status.success(), "the CLI failed:\n{printed}");
+    assert!(
+        project.join("notes.txt").exists(),
+        "the demo script did not run:\n{printed}"
+    );
+}
+
 #[test]
 fn a_missing_script_is_reported_before_anything_is_spawned() {
     let dir = tempfile::tempdir().unwrap();
