@@ -72,7 +72,7 @@ Pass/fail lines are in `01-implementation-plan.md` §4. Code lives in
   client. Done when an integration test runs a fake script with text, a tool
   call, and a permission request through `AcpEngine` and observes the events
   in order.
-- [x] **M0-T07 (M)** CLI: `eavery-cli prompt --engine fake --script <path> --cwd <dir> "<text>"`
+- [x] **M0-T07 (M)** `01495f6` — CLI: `eavery-cli prompt --engine fake --script <path> --cwd <dir> "<text>"`
   prints events as they arrive and answers permissions from the terminal
   (`a`/`r`). Done when the M0 exit test passes and is recorded here.
 
