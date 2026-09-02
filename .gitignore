@@ -1,0 +1,7 @@
+/target
+**/target
+node_modules
+dist
+*.sqlite
+*.sqlite-journal
+.DS_Store

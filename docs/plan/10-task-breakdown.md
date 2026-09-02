@@ -41,7 +41,7 @@ Pass/fail lines are in `01-implementation-plan.md` §4. Code lives in
 
 ## M0 — Skeleton and fake engine
 
-- [ ] **M0-T01 (S)** Create the Cargo workspace from `03-architecture.md` §1–2
+- [x] **M0-T01 (S)** Create the Cargo workspace from `03-architecture.md` §1–2
   with empty lib crates and `fn main() {}` binaries. `rust-toolchain.toml`,
   `.gitignore` (target, node_modules, dist, `*.sqlite`), `rustfmt.toml`,
   `clippy.toml`. Done when `cargo build --workspace` passes.

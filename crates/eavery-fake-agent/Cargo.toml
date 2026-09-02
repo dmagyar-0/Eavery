@@ -1,0 +1,21 @@
+[package]
+name = "eavery-fake-agent"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description = "Scriptable ACP agent used as the primary test double."
+
+[[bin]]
+name = "eavery-fake-agent"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
