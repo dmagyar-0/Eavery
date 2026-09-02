@@ -33,7 +33,9 @@ chrono = { version = "0.4.45", features = ["serde"] }
 git2 = { version = "0.21.0", default-features = false, features = ["vendored-libgit2"] }
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 agent-client-protocol = "2.0.0"
-agent-client-protocol-schema = "1.7.0"
+# Pinned to what `agent-client-protocol` 2.0.0 requires (`=1.5.0`), so the two
+# can co-resolve. Neither is used yet: M0-T06 took the hand-rolled §7 client.
+agent-client-protocol-schema = "=1.5.0"
 rmcp = { version = "3.2.0", features = ["server", "transport-io", "macros"] }
 clap = { version = "4.6.6", features = ["derive"] }
 directories = "6.0.0"

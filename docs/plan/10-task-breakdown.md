@@ -65,18 +65,18 @@ Pass/fail lines are in `01-implementation-plan.md` §4. Code lives in
   so that SDK bugs are visible). Done when `echo` of a scripted text reply
   works via a manual `printf ... | fake-agent` test and unit tests cover
   request/response framing.
-- [x] **M0-T06 (L)** `eavery-acp::AcpEngine` implementing `Engine` with the
+- [x] **M0-T06 (L)** `e386837` — `eavery-acp::AcpEngine` implementing `Engine` with the
   2.x SDK (`04-acp-engines.md` §5): spawn from a `LaunchSpec`, initialize,
   session/new, prompt with streaming to `EventSink`, permission handler
   bridge, cancel, shutdown. Fallback: `04-acp-engines.md` §7 hand-rolled
   client. Done when an integration test runs a fake script with text, a tool
   call, and a permission request through `AcpEngine` and observes the events
   in order.
-- [ ] **M0-T07 (M)** CLI: `eavery-cli prompt --engine fake --script <path> --cwd <dir> "<text>"`
+- [x] **M0-T07 (M)** CLI: `eavery-cli prompt --engine fake --script <path> --cwd <dir> "<text>"`
   prints events as they arrive and answers permissions from the terminal
   (`a`/`r`). Done when the M0 exit test passes and is recorded here.
 
-**M0 exit recorded:** ______
+**M0 exit recorded:** 2026-09-02, fake engine, Linux — `docs/plan/manual-tests/M0-exit.md`. CI on macOS and Windows still to confirm on the first push.
 
 ## M1 — Real engines from the CLI
 
