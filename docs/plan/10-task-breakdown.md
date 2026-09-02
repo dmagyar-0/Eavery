@@ -56,7 +56,7 @@ Pass/fail lines are in `01-implementation-plan.md` §4. Code lives in
 - [x] **M0-T04 (M)** `22c7f79` — `eavery-core::engine` trait (all methods `&self`; see
   `03-architecture.md` §5) and `RawAgentEvent` enum from `04-acp-engines.md`
   §6. No implementation yet.
-- [x] **M0-T05 (L)** Fake agent: an ACP agent binary that reads a JSON script
+- [x] **M0-T05 (L)** `446383f` — Fake agent: an ACP agent binary that reads a JSON script
   (`11-testing-ci.md` §2) and replays it: `initialize` reply, `session/new`
   reply with optional modes, and for each `session/prompt` a list of actions
   (`text`, `thought`, `tool_call`, `tool_call_update`, `plan`,
@@ -65,7 +65,7 @@ Pass/fail lines are in `01-implementation-plan.md` §4. Code lives in
   so that SDK bugs are visible). Done when `echo` of a scripted text reply
   works via a manual `printf ... | fake-agent` test and unit tests cover
   request/response framing.
-- [ ] **M0-T06 (L)** `eavery-acp::AcpEngine` implementing `Engine` with the
+- [x] **M0-T06 (L)** `eavery-acp::AcpEngine` implementing `Engine` with the
   2.x SDK (`04-acp-engines.md` §5): spawn from a `LaunchSpec`, initialize,
   session/new, prompt with streaming to `EventSink`, permission handler
   bridge, cancel, shutdown. Fallback: `04-acp-engines.md` §7 hand-rolled

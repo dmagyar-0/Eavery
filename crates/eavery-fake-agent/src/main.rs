@@ -310,6 +310,11 @@ impl Agent {
                     "path": script::substitute(&read.path, &cwd),
                 });
                 let outcome = self.call("fs/read_text_file", params)?;
+                // Symmetric with fs_write: a refused read is reported and the
+                // turn goes on, so a test can see why the client said no.
+                if let Err(err) = &outcome {
+                    eprintln!("eavery-fake-agent: read refused: {}", err.message);
+                }
                 if read.expect_refused && outcome.is_ok() {
                     eprintln!(
                         "eavery-fake-agent: expected the client to refuse reading {}, but it did not",
