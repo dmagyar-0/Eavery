@@ -56,9 +56,9 @@ core, CLI, and desktop tests.
 
 | Crate | Tests |
 |---|---|
-| `eavery-core` | model round-trips; journal (`05-git-journal.md` §7); store migrations and CRUD; policy decision table; plan parser; prompt renderer; turn state machine with fake scripts (direct, plan gate, cancel, crash, permission timeout); durability (summary prepend) |
+| `eavery-core` | model round-trips; journal (`05-git-journal.md` §7, including the D16 hand-edit tests); store migrations and CRUD; policy decision table (including a Windows `\\?\` root); `PlanJson` → `Plan` conversion; plan parser; prompt renderer; turn state machine with fake scripts (direct, plan gate, plan-mode-exit refusal, cancel, crash, permission timeout, second `start_turn` refused while running); durability (message-coalesced summary prepend) |
 | `eavery-acp` | framing (SDK or hand-rolled); unknown `sessionUpdate` values ignored; permission bridge; cancel returns `cancelled`; stderr ring buffer |
-| `eavery-engines` | spec resolution with fake PATH per OS; Windows `npx.cmd`; well-known locations; health check state machine with fake agent |
+| `eavery-engines` | spec resolution with fake PATH per OS; Windows `npx.cmd`; well-known locations; health check state machine with fake agent (shallow by default, deep on request); download + checksum verification against a local HTTP fixture; `NeedsNode` detection |
 | `eavery-fake-agent` | JSON-RPC framing; script matching; `expect` failure exit |
 | `eavery-docs-mcp` | golden files; write validation; path guard; stdio listing |
 | `desktop` | `tsc --noEmit`; `eslint`; `scripts/check-vocab.mjs`; `pnpm build`; `cargo test` in `src-tauri` for command serialisation; bindings freshness |
@@ -70,10 +70,13 @@ version, exact prompt, result, and anything surprising. Keep a
 `docs/plan/manual-tests/` folder with one markdown file per run.
 
 Standard prompts:
+- S0 (spikes, recorded in `docs/plan/manual-tests/S0-*.md`): the three
+  pass/fail lines in `01-implementation-plan.md` §4.
 - M1: "List the files in this folder and summarise what each one is for."
 - M2: "Create a file called notes.txt containing today's date, then add a second line saying hello."
 - M4: "Look up the current weather for London and write it into weather.txt" (must trigger an outbound prompt).
-- M5/M6: "Rename every 'FY25' to 'FY26' in the three Word documents in this folder and tell me what you changed."
+- M5: "Rename every 'FY25' to 'FY26' in the three text notes in this folder and tell me what you changed."
+- M6: "Rename every 'FY25' to 'FY26' in the three Word documents in this folder and tell me what you changed." (non-technical tester)
 
 ## 5. CI workflow
 

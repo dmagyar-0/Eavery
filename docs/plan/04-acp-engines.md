@@ -30,7 +30,7 @@ were verified against https://agentclientprotocol.com in September 2026.
 |---|---|---|
 | `session/request_permission` | request | answered by the plan gate or policy handler |
 | `session/update` | notification | mapped to `RawAgentEvent` |
-| `fs/read_text_file` | request | serve from disk, only if path is inside the Project (else error) |
+| `fs/read_text_file` | request | serve from disk from any path the engine could read itself (D15). Playbooks live outside the Project and the engine is told to read them. Log every read outside the Project at `debug`. |
 | `fs/write_text_file` | request | refuse during Planning; during Executing allow only inside Project |
 | `terminal/*` | request | v1 advertises `terminal: false`; engines then use their own shell tooling |
 
@@ -117,8 +117,12 @@ pub struct EngineSpec {
     pub display_name: &'static str,
     pub auth_kind: AuthKind,          // OwnLogin | ApiKey | Local | None
     pub launch: LaunchSpec,           // how to find and run it
-    pub asking_mode_hint: Option<&'static str>, // mode id to prefer if advertised
-    pub plan_mode_hint: Option<&'static str>,   // mode id substring for plan phase
+    pub asking_mode_hint: Option<&'static str>, // mode id substring for the execute phase (asks before acting)
+    pub plan_mode_hint: Option<&'static str>,   // mode id substring for the plan phase (most restrictive: Claude plan mode, Codex read-only)
+    pub plan_exit_signatures: &'static [&'static str], // tool titles / rawInput markers that mean "leave plan mode" (e.g. "ExitPlanMode"); the plan gate rejects them
+    pub source: EngineSource,                   // Bundled | Download { .. } | UserInstalled (08-onboarding-packaging.md §4)
+    pub needs_node: bool,                       // true for claude and gemini adapters
+    pub vendor: &'static str,                   // "OpenAI", "Anthropic", "Google", "local"; shown on the plan card
     pub sign_in_instructions: &'static str,     // shown in onboarding
 }
 ```
@@ -127,8 +131,8 @@ pub struct EngineSpec {
 
 | id | Command | Auth | Notes |
 |---|---|---|---|
-| `claude` | `npx -y @agentclientprotocol/claude-agent-acp` (or the globally installed `claude-agent-acp`) | User's Claude Code login. The adapter uses the Claude Agent SDK, which uses the Claude Code CLI's own login. | Requires Node 18+. The package was previously `@zed-industries/claude-code-acp` (deprecated; do not use). Advertises modes; look for one whose id contains `plan`. Subscription billing for ACP use was scheduled to change 15 June 2026 and paused 16 June 2026. |
-| `codex` | `codex-acp` binary (npm `@zed-industries/codex-acp` ships platform binaries; also GitHub releases of `zed-industries/codex-acp`) | `codex login` (ChatGPT account) or `OPENAI_API_KEY` / `CODEX_API_KEY`. Credentials in `~/.codex/auth.json` or OS keychain; Eavery never reads them. | Rust binary, no Node needed if downloaded from releases. Log `availableModes` on first run and prefer the most restrictive mode that still asks for approval. |
+| `claude` | `npx -y @agentclientprotocol/claude-agent-acp` (or the globally installed `claude-agent-acp`) | User's Claude Code login. The adapter uses the Claude Agent SDK, which uses the Claude Code CLI's own login. | Requires Node 18+ (Eavery cannot download this one; if Node is absent, say so and offer Codex). The package was previously `@zed-industries/claude-code-acp` (deprecated; do not use). `plan_mode_hint` = its plan mode id (record in M1-T05). **Leaving plan mode is a tool call (`ExitPlanMode`) that arrives as a permission request, probably with kind `other`; the plan gate must reject it** (`06` §2.2). Subscription billing for ACP use was scheduled to change 15 June 2026 and paused 16 June 2026; assume it returns. |
+| `codex` | `codex-acp` binary from npm `@agentclientprotocol/codex-acp` (1.8.0, ships platform binaries as optional dependencies; the older `@zed-industries/codex-acp` is **deprecated**, do not use). Codex CLI itself from `openai/codex` GitHub releases (native binaries per platform). **Eavery downloads both** on the zero-key path (`08-onboarding-packaging.md` §4) and spawns `codex login` from the app. | `codex login` (ChatGPT account) or `OPENAI_API_KEY` / `CODEX_API_KEY`. Credentials in `~/.codex/auth.json` or OS keychain; Eavery never reads them. | No Node needed. Primary zero-key engine. Modes are read-only / workspace-write / full-access style, not "plan": `plan_mode_hint` = the read-only mode (OS-sandboxed, the strongest plan-phase guarantee available); `asking_mode_hint` = workspace-write with approval on request. Verify exact ids in M1-T06. |
 | `gemini` | `gemini --experimental-acp` | Google sign-in done in Gemini CLI. | Without the flag it starts interactive mode and hangs. Known to be flaky across Gemini CLI versions; pin the tested version in `sign_in_instructions`. |
 | `goose` | `goose acp` | Provider and model from `~/.config/goose/config.yaml` or env `GOOSE_PROVIDER`, `GOOSE_MODEL`, plus the provider key env (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY`, `OPENROUTER_API_KEY`). | Eavery downloads the goose release binary for the platform on first use (Apache 2.0). Eavery passes provider/model/key via env for the child only, never written to goose's config. Also `--enable-scheduler` exists; do not pass it. |
 | `goose-local` | `goose acp` with `GOOSE_PROVIDER=ollama`, `GOOSE_MODEL=<model>`, `OLLAMA_HOST=http://localhost:11434` | None. | Health check first probes `GET http://localhost:11434/api/tags` and lists models. |
@@ -142,9 +146,19 @@ must be launched via `cmd /C npx ...`; `codex-acp` and `goose` are plain `.exe`.
 goose loads MCP servers passed in `session/new` (`mcpServers`) alongside its own
 extensions. The Claude adapter passes client MCP servers through. Codex and
 Gemini: verify in M1 and record in `CHANGELOG-plan.md`; if an engine ignores
-`mcpServers`, Eavery must instead write the engine's own MCP config (Codex:
-`~/.codex/config.toml` `[mcp_servers.*]`; Gemini: `~/.gemini/settings.json`
-`mcpServers`) after asking the user.
+`mcpServers`, Eavery must instead write the engine's own MCP config, preferring
+the per-project file where one exists (Codex: `<project>/.codex/config.toml`
+`[mcp_servers.*]`; Gemini: `<project>/.gemini/settings.json` `mcpServers`)
+over the user-global one, after asking the user, and the consent copy must say
+that a global file also affects their terminal use of that engine. Those
+folders are in the Journal exclude list.
+
+**goose as a single front door.** goose ships its own ACP providers
+(`claude-acp`, `codex-acp`) that wrap the same adapters above and use the same
+subscriptions. Driving only goose, with its provider set to one of those, would
+collapse this matrix to one row. M1-T09 evaluates it for one day and records
+the verdict; the trade is an extra layer with its own mode and permission
+quirks.
 
 ## 4. Launching a child process (Rust)
 
@@ -308,13 +322,18 @@ See `06-plan-gate-permissions.md` §4 for the content.
 
 ## 9. Health check
 
-`run_health_check(engine)`:
+`run_health_check(engine, deep)`:
 1. Resolve executable (report "not installed" with the paths searched).
 2. Spawn, `initialize` with 15 s timeout (report "did not respond").
 3. If `authMethods` is non-empty and the engine returns an auth error on
    `session/new`, report "needs sign-in" with `sign_in_instructions`.
-4. `session/new` in a temp directory, `session/prompt` "Reply with the single
-   word OK." with a 60 s timeout, then `session/cancel` if still running.
+4. `session/new` in a temp directory. **Stop here by default** (`deep =
+   false`): this establishes installed, responding, and signed-in without
+   spending the user's subscription or waiting on a model. Only when `deep =
+   true` (first run for an engine, "Check again" in Settings, or a new engine
+   version): `session/prompt` "Reply with the single word OK." with a 60 s
+   timeout, then `session/cancel` if still running.
 5. Report `Ready { agent_info, load_session: bool, modes }`; cache for 10 minutes.
+   Never run the deep check for every engine at every launch.
 
 Health checks never run automatically for the `fake` engine in release builds.

@@ -11,3 +11,9 @@ here without moving it into `10-task-breakdown.md` with a milestone.
 - Team policy sync, SSO, audit export
 - Contributing the Tauri shell upstream to goose
 - Apache 2.0 relicensing decision
+- Bundling a Node runtime so the Claude and Gemini adapters are terminal-free too
+- Driving `claude -p --input-format stream-json` directly as a Node-free Claude path (same Anthropic billing bucket as ACP, so no policy gain; only an install gain)
+- User-initiated Journal pruning ("forget history older than N days"); must reconcile with D5 and never be automatic
+- Chart-aware `.xlsx` editing (preserve charts, pivots, conditional formatting on write)
+- Localisation of the Everyday dictionary
+- Crash reporting / opt-in telemetry decision

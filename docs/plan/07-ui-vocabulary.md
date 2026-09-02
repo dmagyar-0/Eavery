@@ -5,8 +5,9 @@
 - React 18 + TypeScript + Vite, created with `pnpm create tauri-app` (template
   `react-ts`). No UI framework; plain CSS modules. State: `zustand` (one store).
 - Tauri API: `@tauri-apps/api` (`invoke`, `listen`), plugins `dialog` (folder
-  picker), `shell` (open links only), `store` is not used (settings live in
-  Rust), `updater`, `process`, `log`.
+  picker), `opener` (open links and files with the OS default app; Tauri v2
+  moved this out of `shell`, which is not used), `store` is not used
+  (settings live in Rust), `updater`, `process`, `log`.
 - Folder layout:
 
 ```
@@ -88,10 +89,14 @@ export const dictionary = {
 ```
 
 Rule enforced by an ESLint custom rule (or a simple script in CI,
-`scripts/check-vocab.mjs`): files under `src/screens` and `src/components`
-must not contain the literal words `commit`, `repo`, `repository`, `diff`,
-`MCP`, `skill`, `stdout`, `stderr`, `stack trace`, `JSON`, `token` outside
-`vocab/`. The check greps case-insensitively and fails CI.
+`scripts/check-vocab.mjs`): in files under `src/screens` and `src/components`,
+**string literals and JSX text** must not contain the words `commit`, `repo`,
+`repository`, `diff`, `MCP`, `skill`, `stdout`, `stderr`, `stack trace`,
+`JSON`, `token` outside `vocab/`. The check is case-insensitive and fails CI.
+It must look only at string literals, template literals, and JSX text nodes
+(parse with `@typescript-eslint/parser` or `acorn-jsx`), not at identifiers
+or code: a plain grep would fail on `JSON.stringify` and any `token`
+variable.
 
 ## 3. Screens
 
@@ -121,6 +126,13 @@ mode: summary; numbered steps; "Files it will change" (relative paths);
 "Cannot be undone" (highlighted, or "Nothing"); "Will not do". Buttons per
 dictionary. Developer mode also shows the raw plan markdown and the JSON.
 
+Always present, above the buttons, one line stating where the documents go
+for this work: "Your documents are sent to {vendor} to do this" (vendor from
+the engine spec: OpenAI, Anthropic, Google, or the BYO-key provider), or
+"Everything stays on this computer" for `goose-local`. The plan's
+`outbound` list covers Connectors; this line covers the model itself, and
+the local-first claim is only honest with it (`03-vision.md` §6).
+
 ### Permission dialog
 Modal, one at a time, queue behind. Title from `permOutbound`/`permDestructive`/
 `permExecute`. Body: the facts from `PermissionView.explanation` (paths,
@@ -141,9 +153,12 @@ listed with the copy from `05-git-journal.md` §5.
 ### Settings
 - **Mode**: Everyday / Developer toggle (persisted).
 - **Assistant / Engines**: list from `list_engines` with status chips
-  (Ready, Needs sign-in, Not installed, Not available), "Check again", and
-  per-engine sign-in instructions. BYO-key entry for goose (stored in OS
-  keychain through the `keyring` crate; never in SQLite). Ollama model picker.
+  (Ready, Needs sign-in, Needs Node.js, Not installed, Not available,
+  Downloading), "Check again", and per engine either an "Install" button
+  (`install_engine`, for goose, Codex CLI, `codex-acp`), a "Sign in with
+  ChatGPT" button (`sign_in_engine`), or the sign-in instructions for
+  user-installed engines. BYO-key entry for goose (stored in OS keychain
+  through the `keyring` crate; never in SQLite). Ollama model picker.
 - **Connectors**: add/edit/remove MCP servers (name, command, args, env,
   `outbound` flag with the sentence "Can this connector send information
   outside this computer?"). Built-in `eavery-docs` cannot be removed.
@@ -163,8 +178,10 @@ listed with the copy from `05-git-journal.md` §5.
    append-only reducer).
 4. **Sequence gaps.** If a `core://event` arrives with `seq > last + 1`, call
    `list_events({after: last})` and merge.
-5. **Keyboard.** Enter sends, Shift+Enter newline, Esc closes dialogs,
-   Cmd/Ctrl+Z in the Project screen opens the Undo confirmation for the last turn.
+5. **Keyboard.** Enter sends, Shift+Enter newline, Esc closes dialogs.
+   Cmd/Ctrl+Z is text undo whenever a text field has focus (never intercept
+   it there); only when focus is outside any input does Cmd/Ctrl+Z open the
+   Undo confirmation for the last turn.
 6. **No spinners longer than 2 s without words.** "Working on it…" plus the
    latest activity line.
 7. **Accessibility baseline.** Buttons are buttons, dialogs trap focus,
@@ -178,3 +195,6 @@ listed with the copy from `05-git-journal.md` §5.
 | NeedsSignIn | "{engine} needs you to sign in. Open Terminal and run `{command}`, then check again." (the command is the one thing shown verbatim) |
 | Unavailable(reason) | "{engine} isn't available right now. You can switch to another assistant." + reason in Developer mode |
 | Ready | "Ready" |
+| Installing(progress) | "Downloading {engine}… {percent}%" (Codex CLI, `codex-acp`, goose) |
+| SigningIn | "Finish signing in to {engine} in your browser, then come back here." |
+| NeedsNode | "{engine} needs Node.js, which isn't installed. Install it from https://nodejs.org, or use ChatGPT (Codex) instead, which Eavery can set up for you." |

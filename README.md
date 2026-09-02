@@ -24,6 +24,7 @@ organisations, **>90% had nothing to do with software development**.
 | [`docs/02-building-blocks.md`](docs/02-building-blocks.md) | Reference architecture, layer by layer, with build / borrow / buy calls. |
 | [`docs/03-vision.md`](docs/03-vision.md) | Positioning, differentiators, wedge, moat, roadmap, monetisation, failure modes. |
 | [`docs/plan/00-README.md`](docs/plan/00-README.md) | **Implementation plan** (Sept 2026): scope, locked decisions, the hardest problems and their solutions, architecture, ordered task list, and test strategy. Start here to build. |
+| [`docs/plan/REVIEW-2026-09.md`](docs/plan/REVIEW-2026-09.md) | Independent review of all of the above: verified claims, strategic issues, spec bugs, and the three spikes to run before committing to the build. |
 
 ## Shape of the thing
 
@@ -38,10 +39,18 @@ Borrow the entire engine. Build the entire experience.
 
 ## The four bets
 
-1. **No API key** — drive the AI the user already pays for, via ACP.
-2. **Invisible git** — automatic checkpoints, one Undo button, nothing lost.
-3. **The plan gate** — plain-English plans, reviewed before anything runs.
-4. **One engine, two vocabularies** — Everyday and Developer mode, one toggle apart.
+1. **Invisible git** — automatic checkpoints of the whole folder (including the
+   user's own edits), one Undo button, nothing lost.
+2. **The plan gate** — plain-English plans, reviewed before anything runs.
+3. **One engine, two vocabularies** — Everyday and Developer mode, one toggle apart.
+4. **No API key** — drive the AI the user already pays for, via ACP. Honest
+   caveat: this needs the vendor's CLI on the machine. Eavery downloads Codex
+   CLI and its ACP adapter itself (terminal-free with a ChatGPT account); the
+   Claude and Gemini adapters need Node, and Anthropic has said its
+   subscription billing for ACP use will change. goose already offers the same
+   subscription sign-in, so this is table stakes, not the moat.
+
+The moat is the first three. See `docs/plan/REVIEW-2026-09.md` §3.
 
 ## Standards, not formats
 

@@ -148,6 +148,13 @@ Differentiation has to come from somewhere other than the idea. See `03-vision.m
   Free/Pro/Max tokens not permitted in third-party tools or the Agent SDK.
 - 4 Apr 2026 — enforcement extended to all third-party agentic harnesses.
 - Casualties included OpenClaw, opencode, NanoClaw.
+- 13–14 May 2026 — Anthropic announced that from 15 June, ACP usage,
+  `claude -p`, the Agent SDK, and third-party apps built on it would stop
+  drawing from Pro/Max limits and move to a separate, API-priced "Agent SDK
+  credit" ($20 Pro, $100 Max 5x, $200 Max 20x).
+- 16 June 2026 — that change was **paused, not cancelled**. Anthropic's help
+  centre (checked 1 Sept 2026) says nothing has changed yet and that a revised
+  plan will be announced before it takes effect.
 
 **Implications for Eavery, and they are not small:**
 
@@ -158,17 +165,34 @@ Differentiation has to come from somewhere other than the idea. See `03-vision.m
    and it is the single biggest adoption barrier in this category. Note that the
    OpenWorker review above flags exactly this ("you need to be comfortable
    managing API keys").
-3. **There is a legitimate path, and it is a differentiator:** don't proxy the
-   subscription — *drive the user's own officially-installed agent over ACP.*
-   Claude Code authenticates itself, under its own ToU, on the user's machine.
-   Eavery is the client, not the harness. Same for Codex CLI.
+3. **There is a tolerated path, and it is worth taking, with eyes open:** don't
+   proxy the subscription — *drive the user's own officially-installed agent
+   over ACP.* Claude Code authenticates itself on the user's machine. Eavery
+   is the client, not the harness. Same for Codex CLI.
 
-   This turns the industry's biggest constraint into Eavery's onboarding
-   advantage: "already have Claude or ChatGPT? Eavery uses it." No API key, no
-   second bill, no ToU grey zone.
+   Be precise about what this is. The Claude ACP adapter
+   (`@agentclientprotocol/claude-agent-acp`) is built on the Claude Agent SDK,
+   which is exactly the surface Anthropic tried to move to separate billing in
+   May 2026. It works today because that change is paused. It is not a
+   "no grey zone" path; it is a path Anthropic has said it will re-price. The
+   Codex route (`codex login` with a ChatGPT account, driven through
+   `codex-acp`) has no such announcement against it and should be treated as
+   the primary zero-key engine. Gemini CLI's free tier is the third.
+
+   Also note that **goose already ships ACP providers** (`claude-acp`,
+   `codex-acp`) that use these same subscriptions, so "use the AI you already
+   pay for" is now available in the open-source engine Eavery embeds. It is
+   table stakes for the category, not a differentiator.
 4. Policy risk is real and recurring. **Never let one provider be load-bearing.**
    Ship day one with: bring-your-own-agent (ACP), bring-your-own-key (Anthropic,
    OpenAI, Google, OpenRouter), and fully-local (Ollama).
+5. **The zero-key path needs a CLI on the machine.** An office worker with a
+   Claude or ChatGPT subscription has the chat app installed, not Claude Code
+   or Codex CLI. Unless Eavery installs the CLI itself, "no API key" means
+   "open Terminal and run `npm install -g`", which is the same wall. Codex CLI
+   and `codex-acp` publish native binaries, so Eavery can download them (as it
+   does goose) and launch the browser sign-in from inside the app. The Claude
+   and Gemini adapters are Node packages; see `docs/plan/02-challenges.md` C1.
 
 ## Sources
 
