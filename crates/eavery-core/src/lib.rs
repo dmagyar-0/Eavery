@@ -5,5 +5,6 @@
 //! agent and the CLI cheap (see `docs/plan/03-architecture.md` §1).
 #![deny(unsafe_code)]
 
+pub mod engine;
 pub mod event;
 pub mod model;

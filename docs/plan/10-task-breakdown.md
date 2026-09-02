@@ -45,15 +45,15 @@ Pass/fail lines are in `01-implementation-plan.md` §4. Code lives in
   with empty lib crates and `fn main() {}` binaries. `rust-toolchain.toml`,
   `.gitignore` (target, node_modules, dist, `*.sqlite`), `rustfmt.toml`,
   `clippy.toml`. Done when `cargo build --workspace` passes.
-- [x] **M0-T02 (S)** CI: `.github/workflows/ci.yml` per `11-testing-ci.md` §5,
+- [x] **M0-T02 (S)** `b2e700a` — CI: `.github/workflows/ci.yml` per `11-testing-ci.md` §5,
   Rust only for now (no Tauri yet). Done when the workflow is green on all three OSes.
-- [x] **M0-T03 (M)** `eavery-core::model` and `eavery-core::event` types from
+- [x] **M0-T03 (M)** `1b98dd3` — `eavery-core::model` and `eavery-core::event` types from
   `03-architecture.md` §3–4, with `serde` and `ts-rs` derives, including
   `PlanJson` and `Plan::from(PlanJson)`. Unit test that every `CoreEvent`
   variant round-trips through JSON and that the sample `eavery-plan` block
   from `06` §2.3 parses into a `Plan` with populated steps. Done when the
   tests pass.
-- [ ] **M0-T04 (M)** `eavery-core::engine` trait (all methods `&self`; see
+- [x] **M0-T04 (M)** `eavery-core::engine` trait (all methods `&self`; see
   `03-architecture.md` §5) and `RawAgentEvent` enum from `04-acp-engines.md`
   §6. No implementation yet.
 - [ ] **M0-T05 (L)** Fake agent: an ACP agent binary that reads a JSON script
