@@ -41,11 +41,11 @@ Pass/fail lines are in `01-implementation-plan.md` §4. Code lives in
 
 ## M0 — Skeleton and fake engine
 
-- [x] **M0-T01 (S)** Create the Cargo workspace from `03-architecture.md` §1–2
+- [x] **M0-T01 (S)** `662f2c5` — Create the Cargo workspace from `03-architecture.md` §1–2
   with empty lib crates and `fn main() {}` binaries. `rust-toolchain.toml`,
   `.gitignore` (target, node_modules, dist, `*.sqlite`), `rustfmt.toml`,
   `clippy.toml`. Done when `cargo build --workspace` passes.
-- [ ] **M0-T02 (S)** CI: `.github/workflows/ci.yml` per `11-testing-ci.md` §5,
+- [x] **M0-T02 (S)** CI: `.github/workflows/ci.yml` per `11-testing-ci.md` §5,
   Rust only for now (no Tauri yet). Done when the workflow is green on all three OSes.
 - [ ] **M0-T03 (M)** `eavery-core::model` and `eavery-core::event` types from
   `03-architecture.md` §3–4, with `serde` and `ts-rs` derives, including
