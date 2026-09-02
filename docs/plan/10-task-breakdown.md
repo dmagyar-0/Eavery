@@ -47,7 +47,7 @@ Pass/fail lines are in `01-implementation-plan.md` §4. Code lives in
   `clippy.toml`. Done when `cargo build --workspace` passes.
 - [x] **M0-T02 (S)** CI: `.github/workflows/ci.yml` per `11-testing-ci.md` §5,
   Rust only for now (no Tauri yet). Done when the workflow is green on all three OSes.
-- [ ] **M0-T03 (M)** `eavery-core::model` and `eavery-core::event` types from
+- [x] **M0-T03 (M)** `eavery-core::model` and `eavery-core::event` types from
   `03-architecture.md` §3–4, with `serde` and `ts-rs` derives, including
   `PlanJson` and `Plan::from(PlanJson)`. Unit test that every `CoreEvent`
   variant round-trips through JSON and that the sample `eavery-plan` block
