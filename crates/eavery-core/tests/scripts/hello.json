@@ -1,0 +1,43 @@
+{
+  "initialize": { "agentInfo": { "name": "fake", "version": "0.0.1" }, "loadSession": false },
+  "session": {
+    "modes": {
+      "currentModeId": "work",
+      "availableModes": [
+        { "id": "work", "name": "Work" },
+        { "id": "plan", "name": "Plan" }
+      ]
+    }
+  },
+  "turns": [
+    {
+      "match": "notes",
+      "actions": [
+        { "thought": "Looking around" },
+        {
+          "tool_call": {
+            "id": "t1",
+            "title": "List the folder",
+            "kind": "read",
+            "status": "completed",
+            "locations": ["{{cwd}}"]
+          }
+        },
+        { "plan": [{ "content": "Write notes.txt", "priority": "high", "status": "in_progress" }] },
+        {
+          "request_permission": {
+            "toolCallId": "t2",
+            "title": "Create notes.txt",
+            "kind": "edit",
+            "locations": ["{{cwd}}/notes.txt"],
+            "expect": "allow_once"
+          }
+        },
+        { "fs_write": { "path": "{{cwd}}/notes.txt", "text": "hello from the fake engine\n" } },
+        { "tool_call_update": { "id": "t2", "status": "completed" } },
+        { "text": "Created notes.txt with one line." },
+        { "stop": "end_turn" }
+      ]
+    }
+  ]
+}

@@ -41,22 +41,22 @@ Pass/fail lines are in `01-implementation-plan.md` §4. Code lives in
 
 ## M0 — Skeleton and fake engine
 
-- [ ] **M0-T01 (S)** Create the Cargo workspace from `03-architecture.md` §1–2
+- [x] **M0-T01 (S)** `662f2c5` — Create the Cargo workspace from `03-architecture.md` §1–2
   with empty lib crates and `fn main() {}` binaries. `rust-toolchain.toml`,
   `.gitignore` (target, node_modules, dist, `*.sqlite`), `rustfmt.toml`,
   `clippy.toml`. Done when `cargo build --workspace` passes.
-- [ ] **M0-T02 (S)** CI: `.github/workflows/ci.yml` per `11-testing-ci.md` §5,
+- [x] **M0-T02 (S)** `b2e700a` — CI: `.github/workflows/ci.yml` per `11-testing-ci.md` §5,
   Rust only for now (no Tauri yet). Done when the workflow is green on all three OSes.
-- [ ] **M0-T03 (M)** `eavery-core::model` and `eavery-core::event` types from
+- [x] **M0-T03 (M)** `1b98dd3` — `eavery-core::model` and `eavery-core::event` types from
   `03-architecture.md` §3–4, with `serde` and `ts-rs` derives, including
   `PlanJson` and `Plan::from(PlanJson)`. Unit test that every `CoreEvent`
   variant round-trips through JSON and that the sample `eavery-plan` block
   from `06` §2.3 parses into a `Plan` with populated steps. Done when the
   tests pass.
-- [ ] **M0-T04 (M)** `eavery-core::engine` trait (all methods `&self`; see
+- [x] **M0-T04 (M)** `22c7f79` — `eavery-core::engine` trait (all methods `&self`; see
   `03-architecture.md` §5) and `RawAgentEvent` enum from `04-acp-engines.md`
   §6. No implementation yet.
-- [ ] **M0-T05 (L)** Fake agent: an ACP agent binary that reads a JSON script
+- [x] **M0-T05 (L)** `446383f` — Fake agent: an ACP agent binary that reads a JSON script
   (`11-testing-ci.md` §2) and replays it: `initialize` reply, `session/new`
   reply with optional modes, and for each `session/prompt` a list of actions
   (`text`, `thought`, `tool_call`, `tool_call_update`, `plan`,
@@ -65,18 +65,18 @@ Pass/fail lines are in `01-implementation-plan.md` §4. Code lives in
   so that SDK bugs are visible). Done when `echo` of a scripted text reply
   works via a manual `printf ... | fake-agent` test and unit tests cover
   request/response framing.
-- [ ] **M0-T06 (L)** `eavery-acp::AcpEngine` implementing `Engine` with the
+- [x] **M0-T06 (L)** `e386837` — `eavery-acp::AcpEngine` implementing `Engine` with the
   2.x SDK (`04-acp-engines.md` §5): spawn from a `LaunchSpec`, initialize,
   session/new, prompt with streaming to `EventSink`, permission handler
   bridge, cancel, shutdown. Fallback: `04-acp-engines.md` §7 hand-rolled
   client. Done when an integration test runs a fake script with text, a tool
   call, and a permission request through `AcpEngine` and observes the events
   in order.
-- [ ] **M0-T07 (M)** CLI: `eavery-cli prompt --engine fake --script <path> --cwd <dir> "<text>"`
+- [x] **M0-T07 (M)** `01495f6` — CLI: `eavery-cli prompt --engine fake --script <path> --cwd <dir> "<text>"`
   prints events as they arrive and answers permissions from the terminal
   (`a`/`r`). Done when the M0 exit test passes and is recorded here.
 
-**M0 exit recorded:** ______
+**M0 exit recorded:** 2026-09-02, fake engine, Linux — `docs/plan/manual-tests/M0-exit.md`. CI on macOS and Windows still to confirm on the first push.
 
 ## M1 — Real engines from the CLI
 

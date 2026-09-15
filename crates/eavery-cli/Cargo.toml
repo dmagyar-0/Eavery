@@ -1,0 +1,26 @@
+[package]
+name = "eavery-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description = "Headless driver for the Eavery core, used for development and CI."
+
+[[bin]]
+name = "eavery-cli"
+path = "src/main.rs"
+
+[dependencies]
+eavery-acp.workspace = true
+eavery-core.workspace = true
+eavery-engines.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

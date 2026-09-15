@@ -1,0 +1,2 @@
+# Keep the bar where the plan puts it: `cargo clippy --workspace --all-targets -- -D warnings`.
+too-many-arguments-threshold = 9
