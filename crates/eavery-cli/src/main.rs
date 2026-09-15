@@ -100,7 +100,7 @@ async fn prompt(args: PromptArgs) -> Result<ExitCode> {
         Some(cwd) => cwd.clone(),
         None => std::env::current_dir().context("reading the current directory")?,
     };
-    let cwd = std::fs::canonicalize(&cwd)
+    let cwd = eavery_core::paths::canonicalize(&cwd)
         .with_context(|| format!("{} is not a folder", cwd.display()))?;
 
     let engine = Arc::new(AcpEngine::new(launch_spec(&args, &cwd)?));
@@ -170,8 +170,8 @@ fn launch_spec(args: &PromptArgs, cwd: &std::path::Path) -> Result<LaunchSpec> {
     }
     // The engine runs in the project folder, so a path relative to where the
     // user typed the command would resolve against the wrong directory.
-    let script =
-        std::fs::canonicalize(script).with_context(|| format!("resolving {}", script.display()))?;
+    let script = eavery_core::paths::canonicalize(script)
+        .with_context(|| format!("resolving {}", script.display()))?;
 
     let mut spec = LaunchSpec::new("fake", fake_agent_path()?).cwd(cwd);
     spec.args.push("--script".to_owned());

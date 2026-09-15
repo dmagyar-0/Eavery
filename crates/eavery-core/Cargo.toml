@@ -10,6 +10,7 @@ description = "Eavery domain model, event stream, journal, policy and turn engin
 [dependencies]
 async-trait.workspace = true
 chrono.workspace = true
+dunce.workspace = true
 futures.workspace = true
 serde.workspace = true
 serde_json.workspace = true

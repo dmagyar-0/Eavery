@@ -200,7 +200,10 @@ impl Engine for AcpEngine {
         resume: Option<&str>,
     ) -> Result<OpenedSession, EngineError> {
         let connection = self.connection().await?;
-        *self.shared.fs.project_root.write().await = Some(cwd.to_path_buf());
+        // Normalised once, here, because this is the path the engine is given
+        // and joins onto for the rest of the session.
+        let cwd = eavery_core::paths::canonical_or_self(cwd);
+        *self.shared.fs.project_root.write().await = Some(cwd.clone());
 
         let servers: Vec<Value> = mcp.iter().map(mcp_server_json).collect();
 
@@ -209,9 +212,9 @@ impl Engine for AcpEngine {
         let (method, params) = match resume {
             Some(session_id) => (
                 "session/load",
-                json!({ "sessionId": session_id, "cwd": cwd, "mcpServers": servers }),
+                json!({ "sessionId": session_id, "cwd": &cwd, "mcpServers": servers }),
             ),
-            None => ("session/new", json!({ "cwd": cwd, "mcpServers": servers })),
+            None => ("session/new", json!({ "cwd": &cwd, "mcpServers": servers })),
         };
 
         let response = connection
@@ -537,32 +540,13 @@ fn cancelled_outcome() -> Value {
     json!({ "outcome": { "outcome": "cancelled" } })
 }
 
-/// Whether `path` sits inside `root`. A path that does not exist yet is judged
-/// by its nearest existing ancestor, because a write creates its target.
-///
-/// M4-T02 replaces this with `eavery-core::policy::is_inside`, which also
-/// handles Windows verbatim paths. Until then this is deliberately strict:
-/// without a Project root, nothing is inside one.
+/// Whether `path` sits inside `root`, with the platform handling in
+/// [`eavery_core::paths`]. Deliberately strict about the missing case: without
+/// a Project root, nothing is inside one.
 fn is_inside_project(path: &Path, root: Option<&Path>) -> bool {
-    let Some(root) = root else { return false };
-    let root = canonical_or_self(root);
-    let candidate = nearest_existing(path);
-    candidate.starts_with(&root)
-}
-
-fn canonical_or_self(path: &Path) -> PathBuf {
-    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
-}
-
-/// Canonicalises as much of `path` as exists, keeping the rest, so a file about
-/// to be created is judged by the directory it will land in.
-fn nearest_existing(path: &Path) -> PathBuf {
-    if path.exists() {
-        return canonical_or_self(path);
-    }
-    match (path.parent(), path.file_name()) {
-        (Some(parent), Some(name)) => nearest_existing(parent).join(name),
-        _ => path.to_path_buf(),
+    match root {
+        Some(root) => eavery_core::paths::is_inside(path, root),
+        None => false,
     }
 }
 

@@ -64,10 +64,19 @@ Three bugs the exit test found:
 
 The first two were fixed in M0-T06, the third in M0-T07.
 
-## Not yet verified
+## CI on all three platforms
 
-CI on macOS and Windows. The workflow exists (`.github/workflows/ci.yml`) and
-runs `fmt`, `clippy -D warnings` and `test` on all three, but this session only
-has Linux. Nothing in the code is Linux-specific; the Windows-only paths are
-`CREATE_NO_WINDOW` on spawn and `EXE_SUFFIX` when locating the fake agent.
-Confirm on the first push and record here.
+First run: <https://github.com/dmagyar-0/Eavery/actions/runs/34993581803>.
+Linux and macOS green. **Windows failed**, and found a real bug rather than a
+test artifact:
+
+`std::fs::canonicalize` returns a verbatim path (`\\?\C:\...`) on Windows.
+That was the session `cwd`, so it went over the wire to the engine, which joined
+`{{cwd}}/notes.txt` onto it — and in a verbatim path a forward slash is not a
+separator, so the write landed nowhere. Two CLI tests failed; Linux and macOS
+could not have caught it.
+
+This is the hazard `06-plan-gate-permissions.md` §3.1 warns about, one layer
+earlier than the plan expects it. Fixed by `eavery-core::paths` over `dunce`,
+with the ACP layer and the CLI routed through it, and guarded by two tests that
+are meaningful only on Windows. Recorded in `CHANGELOG-plan.md`.

@@ -8,3 +8,4 @@
 pub mod engine;
 pub mod event;
 pub mod model;
+pub mod paths;
