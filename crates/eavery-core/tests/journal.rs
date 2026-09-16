@@ -43,6 +43,22 @@ impl Fixture {
     }
 }
 
+/// Whether this user is subject to file permissions at all. root is not, and a
+/// test that stands in for a Windows lock by making a directory read-only
+/// would quietly pass by doing nothing.
+#[cfg(unix)]
+fn permissions_are_enforced() -> bool {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().expect("a folder");
+    let closed = dir.path().join("closed");
+    std::fs::create_dir(&closed).unwrap();
+    std::fs::set_permissions(&closed, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let denied = std::fs::write(closed.join("probe"), "x").is_err();
+    std::fs::set_permissions(&closed, std::fs::Permissions::from_mode(0o755)).unwrap();
+    denied
+}
+
 /// Test 1: the Project folder is not a git repository, and opening twice is
 /// opening the same Journal.
 #[test]
@@ -299,4 +315,324 @@ fn the_journal_reports_its_own_size() {
         journal.size_on_disk().unwrap() > 0,
         "a journal with a commit in it is not zero bytes"
     );
+}
+
+/// Test 3: going back to a checkpoint brings the old content back, and the
+/// history grows rather than shrinks.
+#[test]
+fn restoring_an_earlier_checkpoint_brings_the_old_content_back() {
+    let fixture = Fixture::new();
+    let journal = fixture.open();
+
+    fixture.write("report.txt", "FY25");
+    let first = journal
+        .checkpoint(
+            "After: wrote the report",
+            CheckpointKind::PostTurn,
+            None,
+            false,
+        )
+        .unwrap();
+    fixture.write("report.txt", "FY26");
+    journal
+        .checkpoint(
+            "After: renamed the year",
+            CheckpointKind::PostTurn,
+            None,
+            false,
+        )
+        .unwrap();
+
+    let (restored, locked) = journal.restore(&first.id).unwrap();
+
+    assert!(locked.is_empty());
+    assert_eq!(
+        std::fs::read_to_string(fixture.root().join("report.txt")).unwrap(),
+        "FY25"
+    );
+    assert_eq!(restored.kind, CheckpointKind::Restore);
+    assert_eq!(restored.label, "Restored: After: wrote the report");
+
+    let history = journal.list(10).unwrap();
+    assert_eq!(
+        history.len(),
+        4,
+        "opened, two turns, and the restore: {:?}",
+        history.iter().map(|point| &point.label).collect::<Vec<_>>()
+    );
+    assert_eq!(history[0].id, restored.id, "history moves forward");
+}
+
+/// Test 4: a deletion is as recoverable as an edit.
+#[test]
+fn a_deleted_file_comes_back() {
+    let fixture = Fixture::new();
+    let journal = fixture.open();
+
+    fixture.write("keep.txt", "here");
+    let before = journal
+        .checkpoint("After: wrote it", CheckpointKind::PostTurn, None, false)
+        .unwrap();
+
+    std::fs::remove_file(fixture.root().join("keep.txt")).unwrap();
+    let after = journal
+        .checkpoint("After: deleted it", CheckpointKind::PostTurn, None, false)
+        .unwrap();
+    assert_eq!(after.files_changed, 1);
+
+    journal.restore(&before.id).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(fixture.root().join("keep.txt")).unwrap(),
+        "here"
+    );
+}
+
+/// Test 7: the files this product exists for are Word and Excel documents. A
+/// checkpoint that changed one byte of a `.xlsx` would be worse than none.
+#[test]
+fn a_binary_file_round_trips_byte_for_byte() {
+    let fixture = Fixture::new();
+    let journal = fixture.open();
+
+    // A zip header, a NUL run, and every byte value: enough that any text
+    // handling anywhere in the path would corrupt it.
+    let mut bytes = b"PK\x03\x04\x14\x00\x00\x00\x08\x00".to_vec();
+    bytes.extend((0u8..=255).cycle().take(4096));
+    bytes.extend([0u8; 512]);
+    fixture.write("budget.xlsx", &bytes);
+
+    let saved = journal
+        .checkpoint(
+            "After: wrote the workbook",
+            CheckpointKind::PostTurn,
+            None,
+            false,
+        )
+        .unwrap();
+    assert_eq!(saved.files_changed, 1);
+
+    fixture.write("budget.xlsx", b"ruined");
+    journal
+        .checkpoint("After: ruined it", CheckpointKind::PostTurn, None, false)
+        .unwrap();
+    journal.restore(&saved.id).unwrap();
+
+    assert_eq!(
+        std::fs::read(fixture.root().join("budget.xlsx")).unwrap(),
+        bytes,
+        "a workbook has to come back exactly as it went in"
+    );
+}
+
+/// Test 10 (D16): the reason a restore checkpoints first. An edit Eavery never
+/// saw is not lost by going back, and can itself be gone back to.
+#[test]
+fn a_hand_edit_survives_going_back_and_can_be_returned_to() {
+    let fixture = Fixture::new();
+    let journal = fixture.open();
+
+    fixture.write("a.txt", "one");
+    let first = journal
+        .checkpoint("After: wrote one", CheckpointKind::PostTurn, None, false)
+        .unwrap();
+    fixture.write("a.txt", "two");
+    journal
+        .checkpoint("After: wrote two", CheckpointKind::PostTurn, None, false)
+        .unwrap();
+
+    // The user edits the file themselves. Eavery is not watching.
+    fixture.write("a.txt", "three, by hand");
+
+    journal.restore(&first.id).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(fixture.root().join("a.txt")).unwrap(),
+        "one"
+    );
+
+    let history = journal.list(10).unwrap();
+    let kept = history
+        .iter()
+        .find(|point| point.label == "Before going back")
+        .expect("the hand edit has to have been checkpointed first");
+
+    journal.restore(&kept.id).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(fixture.root().join("a.txt")).unwrap(),
+        "three, by hand",
+        "the hand edit has to be somewhere the user can get back to"
+    );
+}
+
+/// Test 11: a file made by hand after the last checkpoint is removed by going
+/// back — but only after it has been captured, so it is recoverable.
+#[test]
+fn a_file_created_by_hand_is_captured_before_a_restore_removes_it() {
+    let fixture = Fixture::new();
+    let journal = fixture.open();
+
+    fixture.write("a.txt", "one");
+    let before = journal
+        .checkpoint("After: wrote a.txt", CheckpointKind::PostTurn, None, false)
+        .unwrap();
+
+    fixture.write("by-hand.txt", "the user's own file");
+    journal.restore(&before.id).unwrap();
+
+    assert!(
+        !fixture.root().join("by-hand.txt").exists(),
+        "going back means going back"
+    );
+
+    let kept = journal
+        .list(10)
+        .unwrap()
+        .into_iter()
+        .find(|point| point.label == "Before going back")
+        .expect("the new file has to have been checkpointed first");
+    journal.restore(&kept.id).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(fixture.root().join("by-hand.txt")).unwrap(),
+        "the user's own file"
+    );
+}
+
+/// Test 8: a file something else is holding is reported, and the rest of the
+/// restore still happens. On Unix the stand-in for a Windows lock is a
+/// directory Eavery may not write to.
+#[cfg(unix)]
+#[test]
+fn a_file_that_cannot_be_written_is_reported_and_the_others_are_restored() {
+    use std::os::unix::fs::PermissionsExt;
+
+    if !permissions_are_enforced() {
+        // root ignores directory permissions, so there is no way to hold a
+        // file shut here. CI runs as an ordinary user and does check this.
+        eprintln!("skipped: running as a user that permissions do not apply to");
+        return;
+    }
+
+    let fixture = Fixture::new();
+    let journal = fixture.open();
+
+    fixture.write("open/held.txt", "original");
+    fixture.write("free.txt", "original");
+    let before = journal
+        .checkpoint("After: wrote both", CheckpointKind::PostTurn, None, false)
+        .unwrap();
+
+    fixture.write("open/held.txt", "changed");
+    fixture.write("free.txt", "changed");
+    journal
+        .checkpoint("After: changed both", CheckpointKind::PostTurn, None, false)
+        .unwrap();
+
+    let locked_dir = fixture.root().join("open");
+    let original = std::fs::metadata(&locked_dir).unwrap().permissions();
+    std::fs::set_permissions(&locked_dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+
+    let (_, locked) = journal.restore(&before.id).unwrap();
+
+    std::fs::set_permissions(&locked_dir, original).unwrap();
+
+    assert_eq!(locked, vec![PathBuf::from("open/held.txt")]);
+    assert_eq!(
+        std::fs::read_to_string(fixture.root().join("free.txt")).unwrap(),
+        "original",
+        "one file being held must not stop the others coming back"
+    );
+    assert_eq!(
+        std::fs::read_to_string(locked_dir.join("held.txt")).unwrap(),
+        "changed",
+        "the held file is untouched, and said so"
+    );
+}
+
+#[test]
+fn a_restore_to_a_checkpoint_that_does_not_exist_is_refused() {
+    let fixture = Fixture::new();
+    let journal = fixture.open();
+    let error = journal.restore(&"not-a-checkpoint".to_owned()).unwrap_err();
+    assert!(
+        matches!(error, JournalError::NoSuchCheckpoint(_)),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn a_diff_between_checkpoints_lists_what_changed_and_shows_the_text() {
+    let fixture = Fixture::new();
+    let journal = fixture.open();
+
+    fixture.write("keep.txt", "FY25\n");
+    fixture.write("gone.txt", "temporary\n");
+    let before = journal
+        .checkpoint("After: first", CheckpointKind::PostTurn, None, false)
+        .unwrap();
+
+    fixture.write("keep.txt", "FY26\n");
+    fixture.write("new.txt", "added\n");
+    std::fs::remove_file(fixture.root().join("gone.txt")).unwrap();
+    let after = journal
+        .checkpoint("After: second", CheckpointKind::PostTurn, None, false)
+        .unwrap();
+
+    let changes = journal.diff(&before.id, &after.id).unwrap();
+    assert_eq!(changes.added, vec![PathBuf::from("new.txt")]);
+    assert_eq!(changes.changed, vec![PathBuf::from("keep.txt")]);
+    assert_eq!(changes.removed, vec![PathBuf::from("gone.txt")]);
+
+    let patch = changes
+        .text_diffs
+        .iter()
+        .find(|(path, _)| path == Path::new("keep.txt"))
+        .map(|(_, text)| text.clone())
+        .expect("a text file has a text diff");
+    assert!(patch.contains("-FY25"), "{patch}");
+    assert!(patch.contains("+FY26"), "{patch}");
+}
+
+/// A binary file appears in the lists and nowhere else: a patch of a `.xlsx`
+/// is noise nobody can read.
+#[test]
+fn a_binary_file_has_no_text_diff() {
+    let fixture = Fixture::new();
+    let journal = fixture.open();
+
+    fixture.write("budget.xlsx", b"PK\x03\x04\x00\x01\x02\x00\x00\x00binary");
+    let before = journal
+        .checkpoint("After: first", CheckpointKind::PostTurn, None, false)
+        .unwrap();
+    fixture.write("budget.xlsx", b"PK\x03\x04\x00\x01\x02\x00\x00\x00changed");
+    let after = journal
+        .checkpoint("After: second", CheckpointKind::PostTurn, None, false)
+        .unwrap();
+
+    let changes = journal.diff(&before.id, &after.id).unwrap();
+    assert_eq!(changes.changed, vec![PathBuf::from("budget.xlsx")]);
+    assert!(changes.text_diffs.is_empty(), "{:?}", changes.text_diffs);
+}
+
+/// What an engine has done so far, before the post-turn checkpoint exists.
+#[test]
+fn a_worktree_diff_sees_uncommitted_work() {
+    let fixture = Fixture::new();
+    let journal = fixture.open();
+
+    fixture.write("a.txt", "one\n");
+    let point = journal
+        .checkpoint("After: wrote a.txt", CheckpointKind::PostTurn, None, false)
+        .unwrap();
+
+    fixture.write("a.txt", "two\n");
+    fixture.write("b.txt", "new\n");
+    fixture.write("~$a.docx", "a lock file nobody wants to hear about");
+
+    let changes = journal.diff_worktree(&point.id).unwrap();
+    assert_eq!(changes.changed, vec![PathBuf::from("a.txt")]);
+    assert_eq!(
+        changes.added,
+        vec![PathBuf::from("b.txt")],
+        "an excluded file is not a change anyone asked about"
+    );
+    assert!(journal.diff_worktree(&point.id).unwrap().removed.is_empty());
 }

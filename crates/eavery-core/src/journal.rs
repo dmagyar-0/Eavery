@@ -22,7 +22,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::model::{Checkpoint, CheckpointKind, ProjectId, TurnId};
+use crate::model::{Checkpoint, CheckpointId, CheckpointKind, ProjectId, TurnId};
 
 /// Files above this are not checkpointed: hashing them on every turn would
 /// cost more than the protection is worth. They are listed as unprotected
@@ -34,6 +34,11 @@ pub const WARN_TOTAL_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
 /// Above this, `open_project` refuses.
 pub const MAX_FILES: usize = 200_000;
+
+/// Text diffs are produced up to this size. Past it the file is still listed
+/// as changed; it is only the patch that is left out, because nobody reads a
+/// three megabyte diff and building one costs more than the page it fills.
+pub const MAX_TEXT_DIFF_BYTES: u64 = 256 * 1024;
 
 /// The one branch. There is no remote, and nothing else writes here.
 pub const BRANCH: &str = "eavery";
@@ -502,11 +507,235 @@ impl Journal {
         })
     }
 
+    /// What changed between two checkpoints.
+    pub fn diff(&self, from: &CheckpointId, to: &CheckpointId) -> Result<ChangeSet, JournalError> {
+        let repo = self.repo.lock().expect("journal lock");
+        let from_tree = self.tree_of(&repo, from)?;
+        let to_tree = self.tree_of(&repo, to)?;
+        let diff = repo.diff_tree_to_tree(Some(&from_tree), Some(&to_tree), None)?;
+        change_set(&diff)
+    }
+
+    /// What has changed since a checkpoint that is not committed yet: the
+    /// user's own edits, or an engine's, before the post-turn checkpoint.
+    ///
+    /// Untracked files count as added, because to the person looking at the
+    /// folder they are exactly that. Excluded files stay excluded.
+    pub fn diff_worktree(&self, from: &CheckpointId) -> Result<ChangeSet, JournalError> {
+        let repo = self.repo.lock().expect("journal lock");
+        let from_tree = self.tree_of(&repo, from)?;
+        let mut options = git2::DiffOptions::new();
+        options
+            .include_untracked(true)
+            .recurse_untracked_dirs(true)
+            .include_typechange(true);
+        let diff = repo.diff_tree_to_workdir(Some(&from_tree), Some(&mut options))?;
+        change_set(&diff)
+    }
+
+    /// Goes back to a checkpoint, without going back in history.
+    ///
+    /// The work tree is committed first (D16), so edits Eavery never saw —
+    /// the user's own, made between turns — are themselves recoverable, and
+    /// the diff that drives the restore is against a tree that matches what is
+    /// really on disk. Then the target's files are written and the files that
+    /// did not exist in it are removed, one at a time, so a file held open by
+    /// Word does not abort the rest. The result is a new checkpoint on top,
+    /// and the list of files that could not be written.
+    ///
+    /// Refusing this while a turn is running is the turn engine's job (C13):
+    /// the Journal does not know that turns exist.
+    pub fn restore(
+        &self,
+        target: &CheckpointId,
+    ) -> Result<(Checkpoint, Vec<PathBuf>), JournalError> {
+        // Not forced: if the work tree already matches HEAD there is nothing
+        // to preserve and no point adding a checkpoint that says so.
+        self.checkpoint("Before going back", CheckpointKind::Manual, None, false)?;
+
+        let (label, locked) = {
+            let repo = self.repo.lock().expect("journal lock");
+            let target_commit = repo.find_commit(parse_id(target)?)?;
+            let target_tree = target_commit.tree()?;
+            let head = head_commit(&repo)?.ok_or_else(|| {
+                JournalError::NoSuchCheckpoint("there is nothing to go back from".to_owned())
+            })?;
+            let diff = repo.diff_tree_to_tree(Some(&head.tree()?), Some(&target_tree), None)?;
+
+            let mut locked = Vec::new();
+            for delta in diff.deltas() {
+                match delta.status() {
+                    git2::Delta::Deleted => {
+                        let Some(path) = delta.old_file().path() else {
+                            continue;
+                        };
+                        if let Err(error) = self.remove_file(path) {
+                            self.record_or_fail(&mut locked, path, error)?;
+                        }
+                    }
+                    _ => {
+                        let Some(path) = delta.new_file().path() else {
+                            continue;
+                        };
+                        let blob = repo.find_blob(delta.new_file().id())?;
+                        if let Err(error) = self.write_file(path, blob.content()) {
+                            self.record_or_fail(&mut locked, path, error)?;
+                        }
+                    }
+                }
+            }
+            (
+                parse_message(target_commit.message().unwrap_or_default()).0,
+                locked,
+            )
+        };
+
+        if !locked.is_empty() {
+            tracing::warn!(
+                project = %self.project_id,
+                count = locked.len(),
+                "some files could not be written back; they are still open somewhere"
+            );
+        }
+
+        // Forced: a restore is a point in history even when the files it wrote
+        // happen to match what was already there.
+        let checkpoint = self.checkpoint(
+            &format!("Restored: {label}"),
+            CheckpointKind::Restore,
+            None,
+            true,
+        )?;
+        Ok((checkpoint, locked))
+    }
+
+    /// A file that is open somewhere else is reported and stepped over; any
+    /// other failure stops the restore, because it is not one the user can do
+    /// anything about by closing a window.
+    fn record_or_fail(
+        &self,
+        locked: &mut Vec<PathBuf>,
+        path: &Path,
+        error: std::io::Error,
+    ) -> Result<(), JournalError> {
+        if is_lock_error(&error) {
+            locked.push(path.to_path_buf());
+            return Ok(());
+        }
+        Err(JournalError::io(self.root.join(path), error))
+    }
+
+    fn remove_file(&self, relative: &Path) -> std::io::Result<()> {
+        match std::fs::remove_file(self.root.join(relative)) {
+            // Already gone is the state that was wanted.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            other => other,
+        }
+    }
+
+    /// Writes through a temporary file in the same directory and renames over
+    /// the original, which is atomic on the same volume: a restore interrupted
+    /// by a crash or a full disk leaves the old file, never half of the new
+    /// one.
+    fn write_file(&self, relative: &Path, contents: &[u8]) -> std::io::Result<()> {
+        let path = self.root.join(relative);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let temporary = path.with_extension(format!(
+            "{}eavery-tmp",
+            path.extension()
+                .map(|extension| format!("{}.", extension.to_string_lossy()))
+                .unwrap_or_default()
+        ));
+        std::fs::write(&temporary, contents)?;
+        match std::fs::rename(&temporary, &path) {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                // The rename is what fails when the original is held open, and
+                // leaving the temporary file behind would be litter in the
+                // user's folder.
+                let _ = std::fs::remove_file(&temporary);
+                Err(error)
+            }
+        }
+    }
+
+    fn tree_of<'repo>(
+        &self,
+        repo: &'repo git2::Repository,
+        id: &CheckpointId,
+    ) -> Result<git2::Tree<'repo>, JournalError> {
+        Ok(repo.find_commit(parse_id(id)?)?.tree()?)
+    }
+
     /// Bytes under the git directory (C12: the Journal grows and the user is
     /// entitled to know by how much).
     pub fn size_on_disk(&self) -> Result<u64, JournalError> {
         Ok(directory_size(&self.git_dir))
     }
+}
+
+/// Whether a failure to write one file should be reported and stepped over
+/// rather than failing the whole restore.
+fn is_lock_error(error: &std::io::Error) -> bool {
+    matches!(classify(error), IoTrouble::Locked | IoTrouble::Permission)
+}
+
+/// The checkpoint id a caller passed, as an object id.
+fn parse_id(id: &CheckpointId) -> Result<git2::Oid, JournalError> {
+    git2::Oid::from_str(id).map_err(|_| JournalError::NoSuchCheckpoint(id.clone()))
+}
+
+/// Turns a diff into the three lists and the patches.
+///
+/// A patch is produced only for a text file under [`MAX_TEXT_DIFF_BYTES`].
+/// `Patch::from_diff` answers `None` for a binary delta, which is also how a
+/// binary file is recognised: the same rule git itself uses, rather than a
+/// guess from the extension.
+fn change_set(diff: &git2::Diff<'_>) -> Result<ChangeSet, JournalError> {
+    let mut changes = ChangeSet::default();
+    for (index, delta) in diff.deltas().enumerate() {
+        let new_path = delta.new_file().path().map(Path::to_path_buf);
+        let old_path = delta.old_file().path().map(Path::to_path_buf);
+        match delta.status() {
+            git2::Delta::Added | git2::Delta::Untracked | git2::Delta::Copied => {
+                changes.added.extend(new_path.clone());
+            }
+            git2::Delta::Deleted => changes.removed.extend(old_path.clone()),
+            git2::Delta::Renamed => {
+                changes.removed.extend(old_path.clone());
+                changes.added.extend(new_path.clone());
+            }
+            _ => changes
+                .changed
+                .extend(new_path.clone().or(old_path.clone())),
+        }
+
+        let Some(path) = new_path.or(old_path) else {
+            continue;
+        };
+        let too_big = delta.new_file().size().max(delta.old_file().size()) > MAX_TEXT_DIFF_BYTES;
+        if too_big {
+            continue;
+        }
+        let Some(mut patch) = git2::Patch::from_diff(diff, index)? else {
+            continue;
+        };
+        // A binary delta still produces a patch — "Binary files a/x and b/x
+        // differ" — with no hunks in it. No hunks means there is nothing a
+        // person could read, which is also true of a mode-only change.
+        if patch.num_hunks() == 0 {
+            continue;
+        }
+        let text = patch.to_buf()?;
+        // A patch that is not UTF-8 is not one anybody can read either; the
+        // file still appears in the lists above.
+        if let Ok(text) = text.as_str() {
+            changes.text_diffs.push((path, text.to_owned()));
+        }
+    }
+    Ok(changes)
 }
 
 /// Points a Journal at its Project folder, through `core.worktree`.
@@ -706,6 +935,28 @@ mod tests {
             std::io::Error::from(std::io::ErrorKind::StorageFull),
         );
         assert!(full.next_action().unwrap().contains("disk space"));
+    }
+
+    #[test]
+    fn a_locked_file_is_stepped_over_and_a_missing_one_is_not() {
+        // Windows: ERROR_SHARING_VIOLATION, which is what an open workbook
+        // looks like. It is not the user doing anything wrong.
+        assert!(is_lock_error(&std::io::Error::from_raw_os_error(32)));
+        assert!(is_lock_error(&std::io::Error::from(
+            std::io::ErrorKind::PermissionDenied
+        )));
+        assert!(!is_lock_error(&std::io::Error::from(
+            std::io::ErrorKind::NotFound
+        )));
+    }
+
+    #[test]
+    fn a_checkpoint_id_that_is_not_one_is_refused_rather_than_guessed() {
+        let error = parse_id(&"not-a-commit".to_owned()).unwrap_err();
+        assert!(
+            matches!(error, JournalError::NoSuchCheckpoint(_)),
+            "{error:?}"
+        );
     }
 
     #[cfg(not(windows))]
