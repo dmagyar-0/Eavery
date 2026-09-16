@@ -45,6 +45,9 @@ futures = "0.3.34"
 tempfile = "3.27.0"
 ts-rs = { version = "12.0.1", features = ["serde-compat", "uuid-impl", "chrono-impl"] }
 keyring = "4.2.0"
+# Not used by discovery, which resolves against a `Platform` parameter so the
+# Windows rules can be tested from any OS (M1-T01, `CHANGELOG-plan.md`). Kept
+# for anything that only ever needs to look something up on the host.
 which = "8.0.6"
 serde_yaml = "0.9.34"
 zip = "8.6.0"

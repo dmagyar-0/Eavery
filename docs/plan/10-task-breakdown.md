@@ -80,15 +80,20 @@ Pass/fail lines are in `01-implementation-plan.md` §4. Code lives in
 
 ## M1 — Real engines from the CLI
 
-- [ ] **M1-T01 (M)** `eavery-engines`: `EngineSpec` table from
+- [x] **M1-T01 (M)** `f1664d5` — `eavery-engines`: `EngineSpec` table from
   `04-acp-engines.md` §2–3, `LaunchSpec` resolution (explicit path, PATH,
   well-known locations per `08-onboarding-packaging.md` §2), Windows
-  `npx.cmd` handling. Unit tests with a fake PATH. 
-- [ ] **M1-T02 (S)** PATH fix on macOS/Linux via `fix-path-env` (or equivalent
-  login-shell probe with 3 s timeout), called once at process start in CLI
-  and desktop.
-- [ ] **M1-T03 (M)** Health check (`04-acp-engines.md` §9) with timeouts and
-  `EngineStatus` results; CLI command `eavery-cli engines` prints a table.
+  `npx.cmd` handling. Unit tests with a fake PATH. `Platform` is a parameter
+  rather than a `cfg!`, so the Windows rules are tested on every OS.
+- [x] **M1-T02 (S)** `f1664d5` — PATH fix on macOS/Linux via the equivalent
+  login-shell probe with a 3 s timeout (`eavery-engines::path_env`), resolved
+  once per process. The probed PATH is returned as data rather than written
+  back to the process environment, and passed to each engine child; see
+  `CHANGELOG-plan.md`.
+- [x] **M1-T03 (M)** `8af10da` — Health check (`04-acp-engines.md` §9) with
+  timeouts and `EngineStatus` results, plus the 10-minute `HealthCache`; CLI
+  command `eavery-cli engines` prints a table (`--deep`, `--all`, `--json`,
+  `--engine <id>`). `eavery-cli prompt` now drives any engine in the table.
 - [ ] **M1-T04 (M)** Manual verification against goose: configure goose with
   any provider, run the M1 exit prompt. Record the `modes` it advertises, and
   whether `mcpServers` in `session/new` are loaded, in `CHANGELOG-plan.md`.
@@ -96,6 +101,10 @@ Pass/fail lines are in `01-implementation-plan.md` §4. Code lives in
   the plan mode id, the permission option kinds it sends, **and exactly how
   `ExitPlanMode` arrives** (kind, title, rawInput) so `plan_exit_signatures`
   can be filled in. Record whether reads go through `fs/read_text_file`.
+  Also decide how "not signed in" is detected: the adapter's `authMethods` is
+  empty either way and `session/new` fails with a bare internal error, so §9
+  step 3 as written never fires. Partial record, handshake only, in
+  `manual-tests/M1-claude-partial.md`.
 - [ ] **M1-T06 (M)** Same for `@agentclientprotocol/codex-acp`. Record mode
   ids (read-only / workspace-write / full-access or equivalents), approval
   behaviour in each, and whether `mcpServers` is honoured. Set
@@ -103,8 +112,11 @@ Pass/fail lines are in `01-implementation-plan.md` §4. Code lives in
 - [ ] **M1-T07 (S)** Same for `gemini --experimental-acp`. If it is unusable
   on the tested version, mark the engine `experimental: true` (hidden behind
   Developer mode) and record why.
-- [ ] **M1-T08 (S)** stderr capture ring buffer and `EngineCrashed` event with
-  the last 50 lines; test by scripting the fake agent to exit mid-prompt.
+- [x] **M1-T08 (S)** `b67f02a` — stderr capture ring buffer (M0-T06) and
+  `EngineCrashed` event with the last 50 lines, via
+  `CoreEvent::from_engine_error`; every other engine failure becomes an
+  `Error` with a next action. Tested by scripting the fake agent to exit
+  mid-prompt.
 - [ ] **M1-T09 (M)** One-day evaluation of goose's `claude-acp` / `codex-acp`
   providers as a single front door (`04-acp-engines.md` §3). Record the
   verdict in `CHANGELOG-plan.md`; if adopted, the direct Claude/Codex rows
