@@ -126,14 +126,29 @@ Pass/fail lines are in `01-implementation-plan.md` §4. Code lives in
 
 ## M2 — Journal
 
-- [ ] **M2-T01 (M)** `Journal::open_or_create` with detached git dir,
-  `info/exclude` (full list from `05` §3, including `*.eavery-tmp` and the
-  engine state folders), initial checkpoint with progress callback and
-  cancel. Tests 1, 6, 9, 12 from `05-git-journal.md` §7.
-- [ ] **M2-T02 (M)** `checkpoint` with size guard, cloud-placeholder guard, and trailers; `list`. Tests 2, 5, 7.
-- [ ] **M2-T03 (M)** `diff` and `diff_worktree` producing `ChangeSet` with text diffs. Test on text and binary fixtures.
-- [ ] **M2-T04 (L)** `restore` forward-only with the D16 pre-restore checkpoint, per-file, lock-tolerant. Tests 3, 4, 8, 10, 11.
-- [ ] **M2-T05 (S)** `unprotected()`, `size_on_disk()`, the guard constants, background packing above 5,000 loose objects; `open_project` size scan with `MAX_FILES` and `WARN_TOTAL_BYTES`.
+- [x] **M2-T01 (M)** `f3ee1fd` — `Journal::open_or_create` with detached git
+  dir, `info/exclude` (full list from `05` §3, including `*.eavery-tmp` and
+  the engine state folders), initial checkpoint with progress callback and
+  cancel. Tests 1, 6, 9, 12 from `05-git-journal.md` §7. The work tree is
+  attached through `core.worktree` rather than `init_opts().workdir_path()`,
+  which writes a gitlink into the Project and refuses on a Project that is
+  already a git repository; see `CHANGELOG-plan.md`.
+- [x] **M2-T02 (M)** `f3ee1fd`, `91f5ab6` — `checkpoint` with size guard,
+  cloud-placeholder guard, and trailers; `list`. Tests 2, 5, 7.
+- [x] **M2-T03 (M)** `91f5ab6` — `diff` and `diff_worktree` producing
+  `ChangeSet` with text diffs. Tested on text and binary fixtures; a delta
+  whose patch has no hunks is the binary test, because `Patch::from_diff`
+  answers with a "Binary files differ" stub rather than nothing.
+- [x] **M2-T04 (L)** `91f5ab6` — `restore` forward-only with the D16
+  pre-restore checkpoint, per-file, lock-tolerant. Tests 3, 4, 8, 10, 11.
+  Test 8 skips itself when run as a user that file permissions do not apply
+  to, since root would pass it without testing anything.
+- [ ] **M2-T05 (S)** *Mostly done* — `unprotected()`, `size_on_disk()`, the
+  guard constants and `scan_project` with `MAX_FILES` / `WARN_TOTAL_BYTES`
+  are in `42eb80f`. **Left:** background packing above 5,000 loose objects.
+  `loose_object_count()` reports the number; the packing itself is not
+  written, because reclaiming the space means deleting the loose copies once
+  a pack holds them and libgit2 has no `gc` — see `CHANGELOG-plan.md`.
 - [ ] **M2-T06 (M)** `eavery-core::store`: SQLite open, migrations, CRUD for
   projects/sessions/turns/events/checkpoints/audit/settings. Tests with a temp db.
 - [ ] **M2-T07 (M)** `eavery-core::turn` state machine in **direct mode only**
