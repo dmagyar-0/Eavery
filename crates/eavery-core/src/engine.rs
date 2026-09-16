@@ -13,7 +13,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::event::{Decision, PermissionView};
+use crate::event::{Decision, ErrorCode, PermissionView};
 use crate::model::{EngineInfo, SessionMode};
 
 /// An MCP server to hand the engine in `session/new`. "Connector" is the
@@ -199,6 +199,80 @@ pub enum EngineError {
         engine_id: String,
         session_id: String,
     },
+}
+
+impl EngineError {
+    pub fn engine_id(&self) -> &str {
+        match self {
+            EngineError::NotInstalled { engine_id, .. }
+            | EngineError::Spawn { engine_id, .. }
+            | EngineError::NeedsSignIn { engine_id, .. }
+            | EngineError::Timeout { engine_id, .. }
+            | EngineError::Crashed { engine_id, .. }
+            | EngineError::Rpc { engine_id, .. }
+            | EngineError::ProtocolVersion { engine_id, .. }
+            | EngineError::Protocol { engine_id, .. }
+            | EngineError::NoSuchSession { engine_id, .. } => engine_id,
+        }
+    }
+
+    /// The code the turn layer records.
+    pub fn code(&self) -> ErrorCode {
+        match self {
+            EngineError::Timeout { .. } => ErrorCode::EngineTimeout,
+            EngineError::Crashed { .. } => ErrorCode::EngineCrashed,
+            EngineError::NotInstalled { .. }
+            | EngineError::Spawn { .. }
+            | EngineError::NeedsSignIn { .. }
+            | EngineError::ProtocolVersion { .. } => ErrorCode::EngineUnavailable,
+            // A protocol confusion or a session Eavery lost track of is a bug
+            // in Eavery or in the engine, not something the user did.
+            EngineError::Rpc { .. }
+            | EngineError::Protocol { .. }
+            | EngineError::NoSuchSession { .. } => ErrorCode::Internal,
+        }
+    }
+
+    /// What the user can do about it, in their own words. Everyday mode shows
+    /// errors as next actions rather than as failures
+    /// (`docs/plan/07-ui-vocabulary.md` §4), and the only place that knows
+    /// which action fits is the error itself.
+    pub fn next_action(&self) -> Option<String> {
+        match self {
+            EngineError::NotInstalled { .. } => {
+                Some("Choose a different assistant in Settings, or install this one.".to_owned())
+            }
+            EngineError::Spawn { .. } => {
+                Some("Check the assistant's path in Settings, then try again.".to_owned())
+            }
+            EngineError::NeedsSignIn { command, .. } => Some(format!(
+                "Open Terminal and run `{command}`, then try again."
+            )),
+            EngineError::Timeout { .. } => {
+                Some("The assistant didn't answer. Try again.".to_owned())
+            }
+            EngineError::Crashed { .. } => {
+                Some("The assistant stopped. Your files are protected; try again.".to_owned())
+            }
+            EngineError::ProtocolVersion { .. } => {
+                Some("Update the assistant, or choose a different one in Settings.".to_owned())
+            }
+            EngineError::Rpc { .. }
+            | EngineError::Protocol { .. }
+            | EngineError::NoSuchSession { .. } => {
+                Some("Try again. If it keeps happening, check Diagnostics.".to_owned())
+            }
+        }
+    }
+
+    /// The last lines of the engine's stderr, when it has any. Empty for every
+    /// failure that is not a crash: there is no process to have said anything.
+    pub fn stderr_tail(&self) -> &[String] {
+        match self {
+            EngineError::Crashed { stderr_tail, .. } => stderr_tail,
+            _ => &[],
+        }
+    }
 }
 
 /// The result of opening a session: the engine's session id plus whatever

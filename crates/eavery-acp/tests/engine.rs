@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use eavery_acp::{AcpEngine, LaunchSpec};
 use eavery_core::engine::{Engine, EngineError, RawAgentEvent, StopReason};
-use eavery_core::event::{Decision, PermissionView};
+use eavery_core::event::{CoreEvent, Decision, PermissionView};
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
@@ -398,20 +398,40 @@ async fn a_crash_mid_turn_fails_the_prompt_with_stderr() {
     .await
     .expect("a crash must not hang the prompt");
 
-    match stop {
-        Err(EngineError::Crashed {
+    let error = match stop {
+        Err(error @ EngineError::Crashed { .. }) => {
+            assert_eq!(error.engine_id(), "fake");
+            assert!(
+                error
+                    .stderr_tail()
+                    .iter()
+                    .any(|line| line.contains("read refused")),
+                "expected the refused read on stderr, got {:?}",
+                error.stderr_tail()
+            );
+            error
+        }
+        other => panic!("expected a crash error, got {other:?}"),
+    };
+
+    // What the turn layer will do with it (M1-T08): a dead engine is its own
+    // event, carrying the stderr that explains it.
+    match CoreEvent::from_engine_error(&error, None) {
+        CoreEvent::EngineCrashed {
             engine_id,
             stderr_tail,
             ..
-        }) => {
+        } => {
             assert_eq!(engine_id, "fake");
+            assert!(stderr_tail.len() <= eavery_core::event::STDERR_TAIL_LINES);
             assert!(
                 stderr_tail.iter().any(|line| line.contains("read refused")),
-                "expected the refused read on stderr, got {stderr_tail:?}"
+                "{stderr_tail:?}"
             );
         }
-        other => panic!("expected a crash error, got {other:?}"),
+        other => panic!("expected EngineCrashed, got {other:?}"),
     }
+
     assert!(!engine.stderr_tail().await.is_empty());
     engine.shutdown().await;
 }
