@@ -669,11 +669,154 @@ impl Journal {
         Ok(repo.find_commit(parse_id(id)?)?.tree()?)
     }
 
+    /// Everything in the Project that Undo does not cover, and why.
+    ///
+    /// This is what the "Not protected" panel reads. It exists so that "your
+    /// files are protected" is a claim Eavery can always back up: a file that
+    /// is too big, or that the user's cloud provider has not downloaded, is
+    /// named rather than quietly missing from history.
+    pub fn unprotected(&self) -> Result<Vec<Unprotected>, JournalError> {
+        let repo = self.repo.lock().expect("journal lock");
+        let mut found = Vec::new();
+        walk_worktree(&self.root, &mut |absolute, relative| {
+            // An excluded file is not unprotected, it is uninteresting: a lock
+            // file Word will rewrite anyway, or a folder an engine keeps its
+            // own state in.
+            if repo.is_path_ignored(relative).unwrap_or(false) {
+                return;
+            }
+            if let Some(reason) = unprotected_reason(absolute) {
+                found.push(Unprotected {
+                    path: relative.to_path_buf(),
+                    reason,
+                });
+            }
+        })?;
+        found.sort_by(|left, right| left.path.cmp(&right.path));
+        Ok(found)
+    }
+
+    /// How many loose objects the Journal has accumulated (C12).
+    ///
+    /// Packing them is not done here: every safe way to reclaim the space
+    /// involves deleting the loose copies once a pack contains them, and doing
+    /// that by hand against libgit2 is not something to invent in passing.
+    /// The count exists so Settings can show it and so the decision is taken
+    /// with a number in front of it.
+    pub fn loose_object_count(&self) -> usize {
+        let objects = self.git_dir.join("objects");
+        let Ok(entries) = std::fs::read_dir(&objects) else {
+            return 0;
+        };
+        entries
+            .flatten()
+            .filter(|entry| {
+                // Loose objects live in 256 two-character folders; `pack` and
+                // `info` are the other two entries and are not among them.
+                entry.file_name().to_str().is_some_and(|name| {
+                    name.len() == 2 && name.chars().all(|c| c.is_ascii_hexdigit())
+                })
+            })
+            .map(|entry| {
+                std::fs::read_dir(entry.path())
+                    .map(Iterator::count)
+                    .unwrap_or(0)
+            })
+            .sum()
+    }
+
     /// Bytes under the git directory (C12: the Journal grows and the user is
     /// entitled to know by how much).
     pub fn size_on_disk(&self) -> Result<u64, JournalError> {
         Ok(directory_size(&self.git_dir))
     }
+}
+
+/// What a folder holds, before Eavery commits to protecting it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+pub struct ProjectScan {
+    pub files: usize,
+    pub bytes: u64,
+}
+
+impl ProjectScan {
+    /// Over [`MAX_FILES`]: opening this folder is refused, and the user is
+    /// asked for a subfolder.
+    pub fn too_many_files(&self) -> bool {
+        self.files > MAX_FILES
+    }
+
+    /// Over [`WARN_TOTAL_BYTES`]: the first checkpoint will take a while and
+    /// the Journal will be large. The user is asked, and may go ahead.
+    pub fn is_large(&self) -> bool {
+        self.bytes > WARN_TOTAL_BYTES
+    }
+}
+
+/// Counts what is in a folder, for the `open_project` guards
+/// (`05-git-journal.md` §4).
+///
+/// Runs before any Journal exists, so it cannot ask git what is excluded; it
+/// skips the directories the exclude list names, which is what the counts are
+/// actually sensitive to — a `node_modules` is the difference between four
+/// hundred files and forty thousand.
+pub fn scan_project(root: &Path) -> Result<ProjectScan, JournalError> {
+    let mut scan = ProjectScan::default();
+    walk_worktree(root, &mut |absolute, _relative| {
+        scan.files += 1;
+        scan.bytes += std::fs::metadata(absolute)
+            .map(|metadata| metadata.len())
+            .unwrap_or(0);
+    })?;
+    Ok(scan)
+}
+
+/// Directories never worth walking into: the user's own git repository, and
+/// the state folders engines keep beside the work. These are the entries of
+/// the exclude list that are whole directories, and skipping them here is what
+/// keeps a scan of a developer's folder from taking a minute.
+const SKIPPED_DIRS: &[&str] = &[
+    ".git",
+    "node_modules",
+    ".claude",
+    ".codex",
+    ".goose",
+    ".gemini",
+];
+
+/// Every file under `root`, with its path relative to `root`.
+fn walk_worktree(root: &Path, visit: &mut dyn FnMut(&Path, &Path)) -> Result<(), JournalError> {
+    fn walk(
+        root: &Path,
+        dir: &Path,
+        visit: &mut dyn FnMut(&Path, &Path),
+    ) -> Result<(), JournalError> {
+        let entries = match std::fs::read_dir(dir) {
+            Ok(entries) => entries,
+            // A folder that cannot be read is not a reason to fail the whole
+            // scan; it is one the user will see in "Not protected" soon
+            // enough.
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => return Ok(()),
+            Err(error) => return Err(JournalError::io(dir, error)),
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            if kind.is_dir() {
+                let name = entry.file_name();
+                if SKIPPED_DIRS.contains(&name.to_string_lossy().as_ref()) {
+                    continue;
+                }
+                walk(root, &path, visit)?;
+            } else if let Ok(relative) = path.strip_prefix(root) {
+                visit(&path, relative);
+            }
+        }
+        Ok(())
+    }
+    walk(root, root, visit)
 }
 
 /// Whether a failure to write one file should be reported and stepped over

@@ -636,3 +636,87 @@ fn a_worktree_diff_sees_uncommitted_work() {
     );
     assert!(journal.diff_worktree(&point.id).unwrap().removed.is_empty());
 }
+
+/// The "Not protected" panel: a claim that files are protected is only worth
+/// making if the exceptions are named.
+#[test]
+fn files_that_undo_does_not_cover_are_named_with_the_reason() {
+    use eavery_core::journal::UnprotectedReason;
+
+    let fixture = Fixture::new();
+    let journal = fixture.open();
+
+    fixture.write("small.txt", "protected");
+    fixture.write("~$report.docx", "excluded, not unprotected");
+    let big = fixture.root().join("big.bin");
+    std::fs::File::create(&big)
+        .unwrap()
+        .set_len(MAX_FILE_BYTES + 1)
+        .unwrap();
+    // How iCloud leaves a file it has evicted from this machine.
+    fixture.write(".notes.pdf.icloud", "a stub, not the file");
+
+    let unprotected = journal.unprotected().unwrap();
+    let paths: Vec<_> = unprotected
+        .iter()
+        .map(|file| file.path.to_string_lossy().into_owned())
+        .collect();
+
+    assert!(paths.contains(&"big.bin".to_owned()), "{paths:?}");
+    assert!(!paths.contains(&"small.txt".to_owned()), "{paths:?}");
+    assert!(
+        !paths.contains(&"~$report.docx".to_owned()),
+        "an excluded file is uninteresting, not unprotected: {paths:?}"
+    );
+
+    let big = unprotected
+        .iter()
+        .find(|file| file.path == Path::new("big.bin"))
+        .unwrap();
+    assert!(matches!(big.reason, UnprotectedReason::TooLarge { .. }));
+
+    // Not on Windows: there a placeholder is an attribute on the real name,
+    // and this stub is just a file.
+    #[cfg(not(windows))]
+    {
+        let stub = unprotected
+            .iter()
+            .find(|file| file.path == Path::new(".notes.pdf.icloud"))
+            .expect("a cloud placeholder is not protected and has to say so");
+        assert_eq!(stub.reason, UnprotectedReason::NotDownloaded);
+    }
+}
+
+#[test]
+fn a_folder_is_counted_before_it_is_protected() {
+    use eavery_core::journal::scan_project;
+
+    let fixture = Fixture::new();
+    fixture.write("a.txt", "12345");
+    fixture.write("sub/b.txt", "678");
+    fixture.write("node_modules/left-pad/index.js", "not counted");
+    fixture.write(".claude/settings.json", "not counted");
+
+    let scan = scan_project(fixture.root()).unwrap();
+    assert_eq!(
+        scan.files, 2,
+        "the folders nobody edits are not the Project"
+    );
+    assert_eq!(scan.bytes, 8);
+    assert!(!scan.too_many_files());
+    assert!(!scan.is_large());
+}
+
+#[test]
+fn the_journal_can_say_how_many_loose_objects_it_has() {
+    let fixture = Fixture::new();
+    fixture.write("a.txt", "one");
+    let journal = fixture.open();
+
+    // A blob, a tree and a commit, at least.
+    assert!(
+        journal.loose_object_count() >= 3,
+        "{}",
+        journal.loose_object_count()
+    );
+}
