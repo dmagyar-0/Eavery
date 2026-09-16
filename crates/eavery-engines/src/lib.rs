@@ -6,9 +6,11 @@
 #![deny(unsafe_code)]
 
 pub mod discovery;
+pub mod health;
 pub mod instructions;
 pub mod path_env;
 pub mod spec;
 
 pub use discovery::{Environment, LaunchVia, NotInstalled, Platform, Resolved, Resolver};
+pub use health::{HealthCache, HealthOptions, check_resolved, run_health_check};
 pub use spec::{AuthKind, ENGINES, EngineSource, EngineSpec, Launch, find, pick_mode, visible};
