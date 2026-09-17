@@ -387,6 +387,8 @@ impl Shared {
             risk: provisional_risk(&kind),
             options,
             explanation: explain(&kind, &locations),
+            kind,
+            locations,
         };
 
         let handler = {

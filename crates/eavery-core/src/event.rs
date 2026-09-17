@@ -191,6 +191,15 @@ pub struct PermissionView {
     pub request_id: String,
     pub tool_call_id: String,
     pub title: String,
+    /// The ACP tool call `kind`, `other` when the engine omits it. The policy
+    /// classifies on this and [`Self::locations`]; the provisional [`Self::risk`]
+    /// below is what the layer that has neither the Project root nor the
+    /// Connector registry could work out on its own.
+    pub kind: String,
+    /// The files the call names, absolute as the engine gave them. Empty means
+    /// the engine did not say what it is about to touch, which is a reason to
+    /// ask rather than a reason to relax.
+    pub locations: Vec<String>,
     pub risk: RiskClass,
     /// Passed through from ACP so the answer can name an option the engine
     /// actually offered.
@@ -366,6 +375,8 @@ mod tests {
                     request_id: "7".into(),
                     tool_call_id: "c1".into(),
                     title: "Edit report.md".into(),
+                    kind: "edit".into(),
+                    locations: vec!["/abs/report.md".into()],
                     risk: RiskClass::Reversible,
                     options: vec![PermissionOption {
                         option_id: "allow".into(),
