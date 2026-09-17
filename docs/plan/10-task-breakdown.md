@@ -208,7 +208,7 @@ Pass/fail lines are in `01-implementation-plan.md` §4. Code lives in
 - [x] **M3-T09 (S)** `09c7022` — Kill children on exit: `RunEvent::Exit`
   shuts every engine down. Done here because M3-T03 is where the runners
   became reachable from the exit handler.
-- [x] **M3-T05 (M)** `<pending>` — Frontend `ipc.ts` (one typed function per
+- [x] **M3-T05 (M)** `ae0c526` — Frontend `ipc.ts` (one typed function per
   command, the only place that calls `invoke`), `events.ts` (the
   `core://event` feed, with the gap re-fetch), `store.ts` (the window's state,
   read through `useSyncExternalStore`; no state library, because the only
