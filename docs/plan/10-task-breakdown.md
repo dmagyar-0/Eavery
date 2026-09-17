@@ -190,19 +190,29 @@ Pass/fail lines are in `01-implementation-plan.md` §4. Code lives in
   Built by walking `TS::visit_dependencies` from the IPC surface's types
   rather than with `#[ts(export)]`, which writes one file per type; see
   `CHANGELOG-plan.md`.
-- [ ] **M3-T03 (M)** Tauri state: an `AppCore` struct wrapping store, journal
-  cache, engine registry, event broadcast; `core://event` emission with `seq`.
-- [ ] **M3-T04 (L)** Commands from `03-architecture.md` §7: projects, engines,
-  `start_turn` (direct), `answer_permission`, `cancel_turn`, checkpoints,
-  `journal_size`, `list_events`, settings. Each command is a thin call into
-  `eavery-core`.
+- [x] **M3-T03 (M)** `<pending>` — Tauri state: `AppCore` wrapping the store,
+  a Journal per open Project, an engine per Project that has run a turn, the
+  health-check cache, the `core://event` emission (the payload is a
+  `StoredEvent`, so it carries `seq`), an in-process broadcast of the same
+  events for anything without a webview, and the permission desk that
+  `answer_permission` resolves.
+- [x] **M3-T04 (L)** `<pending>` — Commands from `03-architecture.md` §7:
+  projects, engines, `start_turn` (direct only; `mode: "plan"` is refused
+  until M4), `answer_permission`, `cancel_turn`, checkpoints,
+  `restore_checkpoint`, `diff_summary`, `list_events`, `list_audit`,
+  `journal_size`, `unprotected_files`, settings. Errors cross as `AppError`
+  (code, message, next action). Tested over the real IPC path with Tauri's
+  mock runtime, which needs no window and no display; that test is what found
+  Undo and "protect this now" needing an engine started, both since fixed
+  (`CHANGELOG-plan.md`).
+- [x] **M3-T09 (S)** `<pending>` — Kill children on exit: `RunEvent::Exit`
+  shuts every engine down. Done here because M3-T03 is where the runners
+  became reachable from the exit handler.
 - [ ] **M3-T05 (M)** Frontend `ipc.ts`, `events.ts`, `store.ts` with gap re-fetch.
 - [ ] **M3-T06 (L)** Screens: Home, Project (three panes), Settings (mode +
   engines only). Raw strings acceptable but must go through `t()` from the start.
 - [ ] **M3-T07 (M)** `Transcript`, `ToolCallRow`, `PermissionDialog` (queue), `Checkpoints` with Undo/Redo.
 - [ ] **M3-T08 (S)** `Diagnostics` panel with log tail (tail the `tracing` file).
-- [ ] **M3-T09 (S)** Kill children on exit (`kill_on_drop` plus explicit
-  shutdown in Tauri's `RunEvent::Exit`).
 
 **M3 exit recorded:** ______
 

@@ -41,6 +41,8 @@ use std::sync::{Arc, Mutex};
 
 use chrono::Utc;
 use futures::FutureExt;
+use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 use crate::engine::{
     Engine, EngineError, McpServerSpec, PermissionHandler, RawAgentEvent, RawToolCall,
@@ -163,6 +165,15 @@ impl TurnError {
     }
 }
 
+/// What going back did: the checkpoint it landed on, and every file something
+/// else held open and so was left alone. The second list is never dropped — a
+/// partial restore the user does not know about is worse than one that failed.
+#[derive(Clone, Debug, Serialize, Deserialize, TS)]
+pub struct RestoreOutcome {
+    pub checkpoint: Checkpoint,
+    pub skipped_locked: Vec<PathBuf>,
+}
+
 /// What a finished turn did.
 #[derive(Clone, Debug)]
 pub struct TurnOutcome {
@@ -205,7 +216,7 @@ pub struct ProjectRunner {
     engine_session: String,
     ask: PermissionHandler,
     session: Session,
-    busy: Mutex<Option<Busy>>,
+    busy: Arc<Mutex<Option<Busy>>>,
 }
 
 impl std::fmt::Debug for ProjectRunner {
@@ -273,7 +284,7 @@ impl ProjectRunner {
             engine_session: opened.session_id,
             ask: callbacks.permission,
             session,
-            busy: Mutex::new(None),
+            busy: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -304,7 +315,7 @@ impl ProjectRunner {
     }
 
     /// Claims the Project, or says what it is already doing.
-    fn claim(&self, what: Busy) -> Result<BusyGuard<'_>, TurnError> {
+    fn claim(&self, what: Busy) -> Result<BusyGuard, TurnError> {
         let mut busy = self.busy.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(current) = *busy {
             return Err(TurnError::Busy {
@@ -313,7 +324,24 @@ impl ProjectRunner {
             });
         }
         *busy = Some(what);
-        Ok(BusyGuard { runner: self })
+        Ok(BusyGuard {
+            busy: Arc::clone(&self.busy),
+        })
+    }
+
+    /// Claims the Project for a turn and says which turn it will be, without
+    /// running it yet.
+    ///
+    /// This exists for a caller that has to answer before the turn does any
+    /// work — a Tauri command returns a `TurnId` while the turn goes on in a
+    /// task of its own — so that "this Project is busy" is the answer to
+    /// `start_turn` rather than an error arriving later from nowhere.
+    pub fn claim_turn(&self) -> Result<TurnTicket, TurnError> {
+        let turn_id = uuid::Uuid::new_v4();
+        Ok(TurnTicket {
+            turn_id,
+            _guard: self.claim(Busy::Turn(turn_id))?,
+        })
     }
 
     /// Runs one turn, start to finish: protect, prompt, protect, report.
@@ -322,8 +350,18 @@ impl ProjectRunner {
     /// return — the work it did up to the cancel is checkpointed and in the
     /// digest — and only an engine that failed is an error.
     pub async fn run_turn(&self, request: &str) -> Result<TurnOutcome, TurnError> {
-        let turn_id = uuid::Uuid::new_v4();
-        let _guard = self.claim(Busy::Turn(turn_id))?;
+        self.run_claimed(self.claim_turn()?, request).await
+    }
+
+    /// Runs the turn a [`TurnTicket`] already claimed. The claim is released
+    /// when this returns, whatever it returns.
+    pub async fn run_claimed(
+        &self,
+        ticket: TurnTicket,
+        request: &str,
+    ) -> Result<TurnOutcome, TurnError> {
+        let turn_id = ticket.turn_id;
+        let _ticket = ticket;
 
         let mut turn = Turn {
             id: turn_id,
@@ -449,14 +487,12 @@ impl ProjectRunner {
 
     /// Takes a checkpoint on the user's say-so rather than a turn's.
     pub async fn checkpoint_now(&self, label: &str) -> Result<Checkpoint, TurnError> {
-        let journal = Arc::clone(&self.journal);
-        let label = label.to_owned();
         let checkpoint =
-            blocking(move || journal.checkpoint(&label, CheckpointKind::Manual, None, false))
-                .await
-                .map_err(|source| TurnError::Checkpoint { source })?;
-
-        self.record_checkpoint(&checkpoint)?;
+            checkpoint_without_session(&self.recorder.store, Arc::clone(&self.journal), label)
+                .await?;
+        self.recorder.emit_or_log(CoreEvent::CheckpointCreated {
+            checkpoint: checkpoint.clone(),
+        });
         Ok(checkpoint)
     }
 
@@ -465,25 +501,23 @@ impl ProjectRunner {
     ///
     /// Returns the new checkpoint the restore made, and any file that was
     /// held open and so left alone — reported, never silently skipped.
-    pub async fn restore(
-        &self,
-        target: &CheckpointId,
-    ) -> Result<(Checkpoint, Vec<PathBuf>), TurnError> {
+    pub async fn restore(&self, target: &CheckpointId) -> Result<RestoreOutcome, TurnError> {
         let _guard = self.claim(Busy::GoingBack)?;
 
-        let (checkpoint, locked) =
+        let outcome =
             restore_without_session(&self.recorder.store, Arc::clone(&self.journal), target)
                 .await?;
 
         self.recorder.emit_or_log(CoreEvent::Restored {
             to: target.clone(),
-            new_checkpoint: checkpoint.id.clone(),
-            skipped_locked: locked
+            new_checkpoint: outcome.checkpoint.id.clone(),
+            skipped_locked: outcome
+                .skipped_locked
                 .iter()
                 .map(|path| path.display().to_string())
                 .collect(),
         });
-        Ok((checkpoint, locked))
+        Ok(outcome)
     }
 
     /// Brings the store's cache of checkpoints up to date with the Journal,
@@ -682,6 +716,26 @@ impl ProjectRunner {
     }
 }
 
+/// Protecting the folder with no engine attached.
+///
+/// "Save a point I can come back to" is not something an assistant does, so
+/// it must not need one started. Same reasoning as
+/// [`restore_without_session`], and the same one thing missing: with no
+/// conversation open there is no transcript to record it in.
+pub async fn checkpoint_without_session(
+    store: &Store,
+    journal: Arc<Journal>,
+    label: &str,
+) -> Result<Checkpoint, TurnError> {
+    let label = label.to_owned();
+    let checkpoint =
+        blocking(move || journal.checkpoint(&label, CheckpointKind::Manual, None, false))
+            .await
+            .map_err(|source| TurnError::Checkpoint { source })?;
+    store.upsert_checkpoint(&checkpoint)?;
+    Ok(checkpoint)
+}
+
 /// Going back with no engine attached.
 ///
 /// Undo has to work whether or not an assistant is running — it is the button
@@ -693,10 +747,10 @@ pub async fn restore_without_session(
     store: &Store,
     journal: Arc<Journal>,
     target: &CheckpointId,
-) -> Result<(Checkpoint, Vec<PathBuf>), TurnError> {
+) -> Result<RestoreOutcome, TurnError> {
     let target_id = target.clone();
     let restoring = Arc::clone(&journal);
-    let (checkpoint, locked) = blocking(move || restoring.restore(&target_id))
+    let (checkpoint, skipped_locked) = blocking(move || restoring.restore(&target_id))
         .await
         .map_err(|source| TurnError::Restore { source })?;
 
@@ -704,7 +758,10 @@ pub async fn restore_without_session(
     // tree first (D16) and the restore itself. Both come back from the
     // Journal, which is the one that knows.
     sync_checkpoints(store, journal, 10).await?;
-    Ok((checkpoint, locked))
+    Ok(RestoreOutcome {
+        checkpoint,
+        skipped_locked,
+    })
 }
 
 /// Brings the store's cache of checkpoints up to date with the Journal.
@@ -723,13 +780,34 @@ pub async fn sync_checkpoints(
 }
 
 /// Releases the Project when the turn (or the restore) ends, however it ends.
-struct BusyGuard<'a> {
-    runner: &'a ProjectRunner,
+struct BusyGuard {
+    busy: Arc<Mutex<Option<Busy>>>,
 }
 
-impl Drop for BusyGuard<'_> {
+impl Drop for BusyGuard {
     fn drop(&mut self) {
-        *self.runner.busy.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        *self.busy.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+}
+
+/// A claim on a Project, and the id of the turn it was claimed for. The claim
+/// lasts until this is dropped or handed to [`ProjectRunner::run_claimed`].
+#[derive(Debug)]
+pub struct TurnTicket {
+    turn_id: TurnId,
+    /// Held for its `Drop`: dropping the ticket frees the Project.
+    _guard: BusyGuard,
+}
+
+impl TurnTicket {
+    pub fn turn_id(&self) -> TurnId {
+        self.turn_id
+    }
+}
+
+impl std::fmt::Debug for BusyGuard {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BusyGuard").finish_non_exhaustive()
     }
 }
 

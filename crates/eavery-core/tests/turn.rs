@@ -800,9 +800,9 @@ async fn going_back_puts_the_files_back_and_says_so() {
         "FY26\n"
     );
 
-    let (restore, locked) = runner.restore(&undo_to).await.unwrap();
-    assert!(locked.is_empty());
-    assert_eq!(restore.kind, CheckpointKind::Restore);
+    let restored_to = runner.restore(&undo_to).await.unwrap();
+    assert!(restored_to.skipped_locked.is_empty());
+    assert_eq!(restored_to.checkpoint.kind, CheckpointKind::Restore);
     assert_eq!(
         std::fs::read_to_string(fixture.path("report.txt")).unwrap(),
         "FY25\n",
@@ -830,7 +830,7 @@ async fn going_back_puts_the_files_back_and_says_so() {
         .store
         .checkpoints_for_project(fixture.project.id, None)
         .unwrap();
-    assert!(cached.iter().any(|cp| cp.id == restore.id));
+    assert!(cached.iter().any(|cp| cp.id == restored_to.checkpoint.id));
     assert!(
         cached
             .iter()
@@ -851,7 +851,7 @@ async fn an_edit_eavery_never_saw_survives_going_back() {
     let outcome = runner.run_turn("Rename the year").await.unwrap();
 
     std::fs::write(fixture.path("mine.txt"), "my own note\n").unwrap();
-    let (_restore, _) = runner
+    runner
         .restore(&outcome.digest.undo_to.clone().unwrap())
         .await
         .unwrap();

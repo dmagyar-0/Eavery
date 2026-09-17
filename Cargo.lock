@@ -1039,12 +1039,21 @@ dependencies = [
 name = "eavery-desktop"
 version = "0.1.0"
 dependencies = [
+ "chrono",
+ "directories",
+ "eavery-acp",
  "eavery-core",
+ "eavery-engines",
  "serde",
  "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-opener",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]

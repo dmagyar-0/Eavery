@@ -6,6 +6,7 @@
 #![deny(unsafe_code)]
 
 pub mod engine;
+pub mod error;
 pub mod event;
 pub mod journal;
 pub mod model;

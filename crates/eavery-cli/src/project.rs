@@ -184,21 +184,23 @@ pub async fn undo(data_dir: &Path, project: &str, to: Option<&str>) -> Result<Ex
         None => last_pre_turn_checkpoint(&store, &project.id)?,
     };
 
-    let (checkpoint, locked) =
-        turn::restore_without_session(&store, Arc::clone(&journal), &target).await?;
+    let outcome = turn::restore_without_session(&store, Arc::clone(&journal), &target).await?;
 
     println_flush(format!("back to  {}", render::short(&target)));
-    println_flush(format!("now at   {}", render::short(&checkpoint.id)));
-    if locked.is_empty() {
+    println_flush(format!(
+        "now at   {}",
+        render::short(&outcome.checkpoint.id)
+    ));
+    if outcome.skipped_locked.is_empty() {
         return Ok(ExitCode::SUCCESS);
     }
     // Reported, never silently skipped: a partial restore the user does not
     // know about is worse than one that failed.
     println_flush(format!(
         "locked   {} file(s) were open and were left alone:",
-        locked.len()
+        outcome.skipped_locked.len()
     ));
-    for path in &locked {
+    for path in &outcome.skipped_locked {
         println_flush(format!("           {}", path.display()));
     }
     println_flush("         Close them and run undo again.");

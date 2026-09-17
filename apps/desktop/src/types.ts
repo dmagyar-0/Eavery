@@ -7,6 +7,14 @@
 // One type per line, in name order: a diff here is a list of the types that
 // changed shape, which is the question anyone reviewing this file has.
 
+export type AppError = { code: ErrorCode, message: string, 
+/**
+ * What the person can do about it, in their own words. `None` when there
+ * is genuinely nothing to suggest, which the UI renders as a plain
+ * report rather than as an instruction.
+ */
+next_action: string | null, };
+
 /**
  * One decision, on the record. Written by the policy, the plan gate, or the
  * user; never rewritten by any of them.
@@ -95,6 +103,25 @@ load_session: boolean,
  * Auth methods the engine advertises. Empty means no auth step is needed.
  */
 auth_methods: Array<string>, };
+
+/**
+ * One row of the Assistants screen: an engine from the table, and what a
+ * health check just said about it (`docs/plan/07-ui-vocabulary.md` §5).
+ */
+export type EngineListing = { id: string, 
+/**
+ * The engine's everyday name: "Claude Code", "On this computer".
+ */
+display_name: string, vendor: string, 
+/**
+ * Hidden unless Developer mode is on.
+ */
+experimental: boolean, status: EngineStatus, 
+/**
+ * Where the executable was found. Developer mode shows it; Everyday mode
+ * never does.
+ */
+program: string | null, };
 
 /**
  * The result of a health check, rendered by
@@ -197,6 +224,13 @@ engine_id: string | null, };
 export type ProjectScan = { files: number, bytes: bigint, };
 
 /**
+ * What going back did: the checkpoint it landed on, and every file something
+ * else held open and so was left alone. The second list is never dropped — a
+ * partial restore the user does not know about is worse than one that failed.
+ */
+export type RestoreOutcome = { checkpoint: Checkpoint, skipped_locked: Array<string>, };
+
+/**
  * How hard an action is to take back. Permission prompts are decided on this
  * axis, not on tool type (decision D7).
  */
@@ -215,6 +249,17 @@ engine_session_id: string | null, created_at: string, };
  * A mode the engine offers, from `session/new`'s optional `modes`.
  */
 export type SessionMode = { id: string, name: string, description: string | null, };
+
+/**
+ * What the user has chosen. Small on purpose: anything that belongs to a
+ * Project lives on the Project, and secrets never live here at all — they go
+ * to the OS keychain (M7-T03).
+ */
+export type Settings = { mode: UiMode, 
+/**
+ * The engine a new Project starts with.
+ */
+default_engine: string | null, };
 
 /**
  * An event as it was stored: the event itself, plus where it sits in the one
@@ -258,6 +303,12 @@ request: string, phase: TurnPhase, plan: Plan | null, pre_checkpoint: string | n
  * (`docs/plan/06-plan-gate-permissions.md` §1).
  */
 export type TurnPhase = "planning" | "awaiting_approval" | "executing" | "done" | "failed" | "cancelled";
+
+/**
+ * Which vocabulary the app speaks, and what it does by default
+ * (`docs/plan/07-ui-vocabulary.md` §1).
+ */
+export type UiMode = "everyday" | "developer";
 
 export type Unprotected = { 
 /**
