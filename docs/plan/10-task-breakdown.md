@@ -177,14 +177,14 @@ Pass/fail lines are in `01-implementation-plan.md` §4. Code lives in
 
 ## M3 — Desktop shell (Developer mode)
 
-- [x] **M3-T01 (M)** `<pending>` — `pnpm create tauri-app` (react-ts) into
+- [x] **M3-T01 (M)** `12e405c` — `pnpm create tauri-app` (react-ts) into
   `apps/desktop`; `src-tauri` added to the workspace as `eavery-desktop`;
   `cargo build --workspace` builds it on Linux here and CI builds it on all
   three OSes. CI gained the pnpm and Node steps it needs, because the crate
   embeds `apps/desktop/dist` at compile time. Tauri's release profile moved to
   the root manifest (a profile in a member is ignored) without its
   `panic = "abort"`; see `CHANGELOG-plan.md`.
-- [x] **M3-T02 (M)** `<pending>` — `ts-rs` bindings generated into
+- [x] **M3-T02 (M)** `12e405c` — `ts-rs` bindings generated into
   `apps/desktop/src/types.ts` by `cargo test -p eavery-core`, which rewrites
   the file and fails when that changed anything, so CI fails on a stale one.
   Built by walking `TS::visit_dependencies` from the IPC surface's types
