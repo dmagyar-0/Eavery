@@ -101,6 +101,32 @@ pub enum CoreEvent {
 }
 
 impl CoreEvent {
+    /// The Turn this event belongs to, where it belongs to one.
+    ///
+    /// The store keys events on it, so it is read from the event rather than
+    /// passed alongside it: a caller that got the two out of step would write
+    /// a transcript that cannot be reassembled.
+    pub fn turn_id(&self) -> Option<TurnId> {
+        match self {
+            CoreEvent::TurnStarted { turn_id, .. }
+            | CoreEvent::PhaseChanged { turn_id, .. }
+            | CoreEvent::AgentText { turn_id, .. }
+            | CoreEvent::AgentThought { turn_id, .. }
+            | CoreEvent::ToolCallStarted { turn_id, .. }
+            | CoreEvent::ToolCallUpdated { turn_id, .. }
+            | CoreEvent::PlanUpdated { turn_id, .. }
+            | CoreEvent::PermissionRequested { turn_id, .. }
+            | CoreEvent::PermissionResolved { turn_id, .. }
+            | CoreEvent::PlanReady { turn_id, .. }
+            | CoreEvent::TurnFinished { turn_id, .. } => Some(*turn_id),
+            CoreEvent::EngineCrashed { turn_id, .. } | CoreEvent::Error { turn_id, .. } => *turn_id,
+            CoreEvent::CheckpointCreated { checkpoint } => checkpoint.turn_id,
+            // A restore happens between turns, and an engine's status is not
+            // about any one of them.
+            CoreEvent::Restored { .. } | CoreEvent::EngineStatus { .. } => None,
+        }
+    }
+
     /// The event for a failure talking to an engine.
     ///
     /// A dead process is its own event, not an error message: the transcript
@@ -455,6 +481,45 @@ mod tests {
         .unwrap();
         assert_eq!(json["type"], "turn_started");
         assert_eq!(json["phase"], "planning");
+    }
+
+    /// The store reads the Turn off the event rather than being told it
+    /// separately, so every variant has to answer. The two that belong to no
+    /// Turn say so: a restore happens between turns, and an engine's status is
+    /// not about one.
+    #[test]
+    fn every_event_knows_which_turn_it_belongs_to() {
+        for event in every_variant() {
+            let expected = match &event {
+                // The sample `Error` is one raised outside a turn, which is
+                // the case the `Option` exists for.
+                CoreEvent::Restored { .. }
+                | CoreEvent::EngineStatus { .. }
+                | CoreEvent::Error { .. } => None,
+                _ => Some(turn_id()),
+            };
+            assert_eq!(
+                event.turn_id(),
+                expected,
+                "wrong turn for {}",
+                serde_json::to_value(&event).unwrap()["type"]
+            );
+        }
+    }
+
+    /// A checkpoint carries its own Turn, and the event around it must not
+    /// disagree with it.
+    #[test]
+    fn a_checkpoint_event_takes_the_turn_from_the_checkpoint() {
+        let mut without = checkpoint();
+        without.turn_id = None;
+        assert_eq!(
+            CoreEvent::CheckpointCreated {
+                checkpoint: without
+            }
+            .turn_id(),
+            None
+        );
     }
 
     #[test]
