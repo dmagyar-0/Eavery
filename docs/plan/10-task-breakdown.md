@@ -208,7 +208,14 @@ Pass/fail lines are in `01-implementation-plan.md` §4. Code lives in
 - [x] **M3-T09 (S)** `09c7022` — Kill children on exit: `RunEvent::Exit`
   shuts every engine down. Done here because M3-T03 is where the runners
   became reachable from the exit handler.
-- [ ] **M3-T05 (M)** Frontend `ipc.ts`, `events.ts`, `store.ts` with gap re-fetch.
+- [x] **M3-T05 (M)** `<pending>` — Frontend `ipc.ts` (one typed function per
+  command, the only place that calls `invoke`), `events.ts` (the
+  `core://event` feed, with the gap re-fetch), `store.ts` (the window's state,
+  read through `useSyncExternalStore`; no state library, because the only
+  state the frontend has is a copy of what the core just said). The gap is
+  detected globally and repaired per session — `seq` is one counter shared by
+  every Project, so a skip may be in a conversation that is not on screen; see
+  `CHANGELOG-plan.md`.
 - [ ] **M3-T06 (L)** Screens: Home, Project (three panes), Settings (mode +
   engines only). Raw strings acceptable but must go through `t()` from the start.
 - [ ] **M3-T07 (M)** `Transcript`, `ToolCallRow`, `PermissionDialog` (queue), `Checkpoints` with Undo/Redo.
