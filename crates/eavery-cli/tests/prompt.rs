@@ -243,12 +243,12 @@ fn a_missing_script_is_reported_before_anything_is_spawned() {
 }
 
 #[test]
-fn asking_for_an_engine_that_does_not_exist_yet_says_so() {
+fn an_engine_that_is_not_in_the_table_lists_the_ones_that_are() {
     let dir = tempfile::tempdir().unwrap();
     let output = cli(&[
         "prompt",
         "--engine",
-        "goose",
+        "not-an-engine",
         "--cwd",
         &dir.path().to_string_lossy(),
         "anything",
@@ -256,9 +256,87 @@ fn asking_for_an_engine_that_does_not_exist_yet_says_so() {
     assert!(!output.status.success());
     let complaint = String::from_utf8_lossy(&output.stderr);
     assert!(
-        complaint.contains("only the `fake` engine exists"),
+        complaint.contains("no engine called `not-an-engine`"),
         "{complaint}"
     );
+    assert!(complaint.contains("goose"), "{complaint}");
+}
+
+/// The script is the fake engine's, and silently ignoring it on a real engine
+/// would run a live model against a test the author meant to be scripted.
+#[test]
+fn a_script_is_refused_for_a_real_engine() {
+    let dir = tempfile::tempdir().unwrap();
+    let script = write_script(dir.path(), exit_test_script());
+    let output = cli(&[
+        "prompt",
+        "--engine",
+        "goose",
+        "--script",
+        &script.to_string_lossy(),
+        "--cwd",
+        &dir.path().to_string_lossy(),
+        "anything",
+    ]);
+    assert!(!output.status.success());
+    let complaint = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        complaint.contains("--script only applies to the fake engine"),
+        "{complaint}"
+    );
+}
+
+/// `eavery-cli engines` is how M1-T04 to M1-T07 are run by hand, so it has to
+/// answer for a real engine end to end: resolve it, start it, open a session,
+/// and say what it found.
+#[test]
+fn the_engines_command_reports_a_working_engine() {
+    let dir = tempfile::tempdir().unwrap();
+    let script = write_script(dir.path(), exit_test_script());
+    let output = cli(&[
+        "engines",
+        "--engine",
+        "fake",
+        "--script",
+        &script.to_string_lossy(),
+        "--json",
+    ]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let reported: Value = serde_json::from_str(&stdout(&output)).expect("the JSON parses");
+    let engine = &reported[0];
+    assert_eq!(engine["id"], "fake");
+    assert_eq!(engine["status"]["state"], "ready");
+    assert_eq!(engine["status"]["info"]["name"], "fake");
+    assert_eq!(engine["status"]["current_mode"], "work");
+    assert!(
+        engine["program"]
+            .as_str()
+            .is_some_and(|program| program.contains("eavery-fake-agent")),
+        "the command has to say which executable it started: {engine}"
+    );
+}
+
+/// An engine that cannot start is a state, not a crash: the command still
+/// prints a row, and only `--engine` turns that into a non-zero exit.
+#[test]
+fn the_engines_command_reports_an_engine_that_will_not_start() {
+    let dir = tempfile::tempdir().unwrap();
+    let missing = dir.path().join("no-such-script.json");
+    let output = cli(&[
+        "engines",
+        "--engine",
+        "fake",
+        "--script",
+        &missing.to_string_lossy(),
+    ]);
+    let complaint = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "{}", stdout(&output));
+    assert!(complaint.contains("no script at"), "{complaint}");
 }
 
 /// An engine that dies mid-turn fails the command, and what it said on the way

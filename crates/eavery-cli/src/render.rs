@@ -4,9 +4,13 @@
 //! The vocabulary layer arrives with M5 and belongs to the GUI; a terminal
 //! reader wants the protocol, not a translation of it.
 
+use std::path::PathBuf;
+
 use eavery_core::engine::{EngineError, OpenedSession, RawAgentEvent, StopReason};
 use eavery_core::event::{Decision, PermissionView};
-use eavery_core::model::EngineInfo;
+use eavery_core::model::{EngineInfo, EngineStatus};
+use eavery_engines::discovery::LaunchVia;
+use eavery_engines::spec::EngineSpec;
 
 use crate::println_flush;
 
@@ -109,6 +113,132 @@ pub fn engine_error(error: &EngineError) {
         for line in stderr_tail.iter().rev().take(50).rev() {
             println_flush(format!("stderr   {line}"));
         }
+    }
+}
+
+/// One row per engine, plus an indented line saying where it was found and
+/// what it said about itself. The health check reports states, not errors, so
+/// a table is the right shape: nothing here is a failure of the command.
+pub type EngineRow = (
+    &'static EngineSpec,
+    Option<(PathBuf, LaunchVia)>,
+    EngineStatus,
+);
+
+pub fn engines_table(rows: &[EngineRow]) -> Vec<String> {
+    let width = rows
+        .iter()
+        .map(|(spec, _, _)| spec.id.len())
+        .max()
+        .unwrap_or(0)
+        .max(6);
+
+    let mut lines = Vec::new();
+    for (spec, found, status) in rows {
+        lines.push(format!(
+            "{:width$}  {:<13}  {}",
+            spec.id,
+            state_word(status),
+            eavery_engines::health::describe(spec, status),
+            width = width
+        ));
+        if let Some((program, via)) = found {
+            lines.push(format!(
+                "{:width$}  {}  ({})",
+                "",
+                program.display(),
+                via_word(*via),
+                width = width
+            ));
+        }
+        for detail in details(status) {
+            lines.push(format!("{:width$}  {detail}", "", width = width));
+        }
+    }
+    lines
+}
+
+pub fn engines_json(rows: &[EngineRow]) -> anyhow::Result<String> {
+    let values: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|(spec, found, status)| {
+            serde_json::json!({
+                "id": spec.id,
+                "display_name": spec.display_name,
+                "vendor": spec.vendor,
+                "program": found.as_ref().map(|(program, _)| program.display().to_string()),
+                "via": found.as_ref().map(|(_, via)| via_word(*via)),
+                "status": status,
+            })
+        })
+        .collect();
+    Ok(serde_json::to_string_pretty(&values)?)
+}
+
+/// The one-word state, for scanning a column.
+fn state_word(status: &EngineStatus) -> &'static str {
+    match status {
+        EngineStatus::NotInstalled { .. } => "not installed",
+        EngineStatus::NeedsNode => "needs node",
+        EngineStatus::NeedsSignIn { .. } => "needs sign-in",
+        EngineStatus::Installing { .. } => "installing",
+        EngineStatus::SigningIn => "signing in",
+        EngineStatus::Ready { .. } => "ready",
+        EngineStatus::Unavailable { .. } => "unavailable",
+    }
+}
+
+fn via_word(via: LaunchVia) -> &'static str {
+    match via {
+        LaunchVia::ExplicitPath => "from settings",
+        LaunchVia::Path => "on PATH",
+        LaunchVia::WellKnown => "well-known location",
+        LaunchVia::Npx => "through npx",
+    }
+}
+
+/// The developer-facing half: what the engine answered, or why it did not.
+/// This is exactly what M1-T04 to M1-T07 ask to be recorded, so the command
+/// that runs those verifications prints it.
+fn details(status: &EngineStatus) -> Vec<String> {
+    match status {
+        EngineStatus::Ready {
+            info,
+            modes,
+            current_mode,
+        } => {
+            let mut lines = vec![format!(
+                "{} {}, protocol v{}, loadSession={}",
+                info.name.as_deref().unwrap_or("(no agent name)"),
+                info.version.as_deref().unwrap_or(""),
+                info.protocol_version,
+                info.load_session
+            )];
+            if !modes.is_empty() {
+                let modes: Vec<String> = modes
+                    .iter()
+                    .map(|mode| {
+                        if Some(&mode.id) == current_mode.as_ref() {
+                            format!("[{}]", mode.id)
+                        } else {
+                            mode.id.clone()
+                        }
+                    })
+                    .collect();
+                lines.push(format!("modes: {}", modes.join(" ")));
+            } else {
+                lines.push("modes: none advertised".to_owned());
+            }
+            if !info.auth_methods.is_empty() {
+                lines.push(format!("auth: {}", info.auth_methods.join(", ")));
+            }
+            lines
+        }
+        EngineStatus::Unavailable { reason } => vec![reason.clone()],
+        EngineStatus::NotInstalled { searched, .. } if !searched.is_empty() => {
+            vec![format!("looked in: {}", searched.join(", "))]
+        }
+        _ => Vec::new(),
     }
 }
 

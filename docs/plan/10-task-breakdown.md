@@ -80,15 +80,20 @@ Pass/fail lines are in `01-implementation-plan.md` §4. Code lives in
 
 ## M1 — Real engines from the CLI
 
-- [ ] **M1-T01 (M)** `eavery-engines`: `EngineSpec` table from
+- [x] **M1-T01 (M)** `f1664d5` — `eavery-engines`: `EngineSpec` table from
   `04-acp-engines.md` §2–3, `LaunchSpec` resolution (explicit path, PATH,
   well-known locations per `08-onboarding-packaging.md` §2), Windows
-  `npx.cmd` handling. Unit tests with a fake PATH. 
-- [ ] **M1-T02 (S)** PATH fix on macOS/Linux via `fix-path-env` (or equivalent
-  login-shell probe with 3 s timeout), called once at process start in CLI
-  and desktop.
-- [ ] **M1-T03 (M)** Health check (`04-acp-engines.md` §9) with timeouts and
-  `EngineStatus` results; CLI command `eavery-cli engines` prints a table.
+  `npx.cmd` handling. Unit tests with a fake PATH. `Platform` is a parameter
+  rather than a `cfg!`, so the Windows rules are tested on every OS.
+- [x] **M1-T02 (S)** `f1664d5` — PATH fix on macOS/Linux via the equivalent
+  login-shell probe with a 3 s timeout (`eavery-engines::path_env`), resolved
+  once per process. The probed PATH is returned as data rather than written
+  back to the process environment, and passed to each engine child; see
+  `CHANGELOG-plan.md`.
+- [x] **M1-T03 (M)** `8af10da` — Health check (`04-acp-engines.md` §9) with
+  timeouts and `EngineStatus` results, plus the 10-minute `HealthCache`; CLI
+  command `eavery-cli engines` prints a table (`--deep`, `--all`, `--json`,
+  `--engine <id>`). `eavery-cli prompt` now drives any engine in the table.
 - [ ] **M1-T04 (M)** Manual verification against goose: configure goose with
   any provider, run the M1 exit prompt. Record the `modes` it advertises, and
   whether `mcpServers` in `session/new` are loaded, in `CHANGELOG-plan.md`.
@@ -96,6 +101,10 @@ Pass/fail lines are in `01-implementation-plan.md` §4. Code lives in
   the plan mode id, the permission option kinds it sends, **and exactly how
   `ExitPlanMode` arrives** (kind, title, rawInput) so `plan_exit_signatures`
   can be filled in. Record whether reads go through `fs/read_text_file`.
+  Also decide how "not signed in" is detected: the adapter's `authMethods` is
+  empty either way and `session/new` fails with a bare internal error, so §9
+  step 3 as written never fires. Partial record, handshake only, in
+  `manual-tests/M1-claude-partial.md`.
 - [ ] **M1-T06 (M)** Same for `@agentclientprotocol/codex-acp`. Record mode
   ids (read-only / workspace-write / full-access or equivalents), approval
   behaviour in each, and whether `mcpServers` is honoured. Set
@@ -103,8 +112,11 @@ Pass/fail lines are in `01-implementation-plan.md` §4. Code lives in
 - [ ] **M1-T07 (S)** Same for `gemini --experimental-acp`. If it is unusable
   on the tested version, mark the engine `experimental: true` (hidden behind
   Developer mode) and record why.
-- [ ] **M1-T08 (S)** stderr capture ring buffer and `EngineCrashed` event with
-  the last 50 lines; test by scripting the fake agent to exit mid-prompt.
+- [x] **M1-T08 (S)** `b67f02a` — stderr capture ring buffer (M0-T06) and
+  `EngineCrashed` event with the last 50 lines, via
+  `CoreEvent::from_engine_error`; every other engine failure becomes an
+  `Error` with a next action. Tested by scripting the fake agent to exit
+  mid-prompt.
 - [ ] **M1-T09 (M)** One-day evaluation of goose's `claude-acp` / `codex-acp`
   providers as a single front door (`04-acp-engines.md` §3). Record the
   verdict in `CHANGELOG-plan.md`; if adopted, the direct Claude/Codex rows
@@ -114,14 +126,29 @@ Pass/fail lines are in `01-implementation-plan.md` §4. Code lives in
 
 ## M2 — Journal
 
-- [ ] **M2-T01 (M)** `Journal::open_or_create` with detached git dir,
-  `info/exclude` (full list from `05` §3, including `*.eavery-tmp` and the
-  engine state folders), initial checkpoint with progress callback and
-  cancel. Tests 1, 6, 9, 12 from `05-git-journal.md` §7.
-- [ ] **M2-T02 (M)** `checkpoint` with size guard, cloud-placeholder guard, and trailers; `list`. Tests 2, 5, 7.
-- [ ] **M2-T03 (M)** `diff` and `diff_worktree` producing `ChangeSet` with text diffs. Test on text and binary fixtures.
-- [ ] **M2-T04 (L)** `restore` forward-only with the D16 pre-restore checkpoint, per-file, lock-tolerant. Tests 3, 4, 8, 10, 11.
-- [ ] **M2-T05 (S)** `unprotected()`, `size_on_disk()`, the guard constants, background packing above 5,000 loose objects; `open_project` size scan with `MAX_FILES` and `WARN_TOTAL_BYTES`.
+- [x] **M2-T01 (M)** `f3ee1fd` — `Journal::open_or_create` with detached git
+  dir, `info/exclude` (full list from `05` §3, including `*.eavery-tmp` and
+  the engine state folders), initial checkpoint with progress callback and
+  cancel. Tests 1, 6, 9, 12 from `05-git-journal.md` §7. The work tree is
+  attached through `core.worktree` rather than `init_opts().workdir_path()`,
+  which writes a gitlink into the Project and refuses on a Project that is
+  already a git repository; see `CHANGELOG-plan.md`.
+- [x] **M2-T02 (M)** `f3ee1fd`, `91f5ab6` — `checkpoint` with size guard,
+  cloud-placeholder guard, and trailers; `list`. Tests 2, 5, 7.
+- [x] **M2-T03 (M)** `91f5ab6` — `diff` and `diff_worktree` producing
+  `ChangeSet` with text diffs. Tested on text and binary fixtures; a delta
+  whose patch has no hunks is the binary test, because `Patch::from_diff`
+  answers with a "Binary files differ" stub rather than nothing.
+- [x] **M2-T04 (L)** `91f5ab6` — `restore` forward-only with the D16
+  pre-restore checkpoint, per-file, lock-tolerant. Tests 3, 4, 8, 10, 11.
+  Test 8 skips itself when run as a user that file permissions do not apply
+  to, since root would pass it without testing anything.
+- [ ] **M2-T05 (S)** *Mostly done* — `unprotected()`, `size_on_disk()`, the
+  guard constants and `scan_project` with `MAX_FILES` / `WARN_TOTAL_BYTES`
+  are in `42eb80f`. **Left:** background packing above 5,000 loose objects.
+  `loose_object_count()` reports the number; the packing itself is not
+  written, because reclaiming the space means deleting the loose copies once
+  a pack holds them and libgit2 has no `gc` — see `CHANGELOG-plan.md`.
 - [ ] **M2-T06 (M)** `eavery-core::store`: SQLite open, migrations, CRUD for
   projects/sessions/turns/events/checkpoints/audit/settings. Tests with a temp db.
 - [ ] **M2-T07 (M)** `eavery-core::turn` state machine in **direct mode only**

@@ -37,6 +37,9 @@ cargo test --workspace
 mkdir -p /tmp/demo && cargo run -p eavery-cli -- prompt --engine fake \
   --script crates/eavery-core/tests/scripts/hello.json \
   --cwd /tmp/demo "write some notes"
+
+# Which assistants are on this computer, and would they work right now.
+cargo run -p eavery-cli -- engines
 ```
 
 Progress is tracked in [`docs/plan/10-task-breakdown.md`](docs/plan/10-task-breakdown.md);
@@ -47,7 +50,7 @@ anything where reality differed from the plan is in
 |---|---|
 | `eavery-core` | Domain model, the one event stream, the `Engine` contract. Depends on no engine. |
 | `eavery-acp` | ACP client: spawns an engine, maps its stream, answers its requests. |
-| `eavery-engines` | Engine table, discovery, health checks. Arrives in M1. |
+| `eavery-engines` | Engine table, discovery, health checks. |
 | `eavery-fake-agent` | A scriptable ACP agent. The primary test double. |
 | `eavery-cli` | Headless driver. Every core feature is built here before the GUI. |
 | `eavery-docs-mcp` | The document Connector. Arrives in M6. |

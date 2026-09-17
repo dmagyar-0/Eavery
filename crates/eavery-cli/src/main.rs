@@ -12,11 +12,15 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use anyhow::{Context, Result, bail};
-use clap::{Parser, Subcommand};
+use anyhow::{Context, Result, anyhow, bail};
+use clap::{Args, Parser, Subcommand};
 use eavery_acp::{AcpEngine, LaunchSpec};
 use eavery_core::engine::{Engine, RawAgentEvent, StopReason};
 use eavery_core::event::{Decision, PermissionView};
+use eavery_core::model::EngineStatus;
+use eavery_engines::discovery::Resolver;
+use eavery_engines::health::{self, HealthOptions};
+use eavery_engines::spec::EngineSpec;
 use tokio::sync::mpsc;
 
 #[derive(Parser, Debug)]
@@ -35,18 +39,37 @@ struct Cli {
 enum Command {
     /// Send one request to an engine and print what it does.
     Prompt(PromptArgs),
+    /// Say which engines are installed on this computer and whether they work.
+    Engines(EnginesArgs),
+}
+
+/// How to find and start an engine, shared by `prompt` and `engines`.
+#[derive(Args, Debug, Default)]
+struct LaunchArgs {
+    /// The fake engine's script (`docs/plan/11-testing-ci.md` §2).
+    #[arg(long)]
+    script: Option<PathBuf>,
+
+    /// Use this executable instead of searching for one. The command-line
+    /// equivalent of Settings → Assistants → path.
+    #[arg(long, value_name = "PATH")]
+    engine_path: Option<PathBuf>,
+
+    /// Extra environment for the engine child only, `NAME=VALUE`. Repeatable.
+    /// This is how goose is told which provider and model to use.
+    #[arg(long, value_name = "NAME=VALUE")]
+    env: Vec<String>,
 }
 
 #[derive(Parser, Debug)]
 struct PromptArgs {
-    /// Which engine to drive. Only `fake` exists until M1 adds the engine
-    /// table.
+    /// Which engine to drive: an id from the engine table (`eavery-cli
+    /// engines` lists them).
     #[arg(long, default_value = "fake")]
     engine: String,
 
-    /// The fake engine's script (`docs/plan/11-testing-ci.md` §2).
-    #[arg(long)]
-    script: Option<PathBuf>,
+    #[command(flatten)]
+    launch: LaunchArgs,
 
     /// The folder the engine works in. Defaults to the current directory.
     #[arg(long)]
@@ -60,6 +83,30 @@ struct PromptArgs {
 
     /// The request to send.
     request: String,
+}
+
+#[derive(Parser, Debug)]
+struct EnginesArgs {
+    /// Check only this engine, and exit non-zero unless it is ready.
+    #[arg(long)]
+    engine: Option<String>,
+
+    /// Also send a one-word prompt, which costs a request and a wait
+    /// (`docs/plan/04-acp-engines.md` §9).
+    #[arg(long)]
+    deep: bool,
+
+    /// Include engines that are hidden by default: the fake one, and any
+    /// marked experimental.
+    #[arg(long)]
+    all: bool,
+
+    /// Print the statuses as JSON instead of a table.
+    #[arg(long)]
+    json: bool,
+
+    #[command(flatten)]
+    launch: LaunchArgs,
 }
 
 fn main() -> ExitCode {
@@ -92,6 +139,7 @@ fn main() -> ExitCode {
 async fn run(cli: Cli) -> Result<ExitCode> {
     match cli.command {
         Command::Prompt(args) => prompt(args).await,
+        Command::Engines(args) => engines(args).await,
     }
 }
 
@@ -155,11 +203,67 @@ async fn prompt(args: PromptArgs) -> Result<ExitCode> {
 }
 
 fn launch_spec(args: &PromptArgs, cwd: &std::path::Path) -> Result<LaunchSpec> {
-    if args.engine != "fake" {
-        bail!(
-            "only the `fake` engine exists so far; real engine discovery arrives with M1. \
-             See docs/plan/10-task-breakdown.md."
+    let spec = engine_spec(&args.engine)?;
+    // The arguments are checked before anything is looked for: a command that
+    // was typed wrong says so, whatever happens to be installed.
+    let extra_args = extra_args(spec, &args.launch)?;
+    let env = parse_env(&args.launch.env)?;
+
+    let resolver = resolver_for(&args.launch, spec);
+    let resolved = resolver
+        .resolve(spec)
+        .map_err(|error| not_installed(spec, &error))?;
+
+    tracing::debug!(
+        engine = spec.id,
+        program = %resolved.program.display(),
+        via = ?resolved.via,
+        "found the engine"
+    );
+    if resolved.companion_missing {
+        // Not fatal: the adapter may still find a login elsewhere. Worth
+        // saying, because "it started and then said it was not signed in" is
+        // otherwise a mystery.
+        tracing::warn!(
+            engine = spec.id,
+            "the CLI this adapter drives is not installed; it may have no login"
         );
+    }
+
+    let mut launch = resolved.launch_spec().cwd(cwd);
+    launch.args.extend(extra_args);
+    launch.env.extend(env);
+    Ok(launch)
+}
+
+fn engine_spec(id: &str) -> Result<&'static EngineSpec> {
+    eavery_engines::find(id).ok_or_else(|| {
+        let known: Vec<&str> = eavery_engines::ENGINES.iter().map(|spec| spec.id).collect();
+        anyhow!(
+            "no engine called `{id}`. Known engines: {}",
+            known.join(", ")
+        )
+    })
+}
+
+fn resolver_for(args: &LaunchArgs, spec: &EngineSpec) -> Resolver {
+    // The PATH probe happens here, on the first resolution, rather than at
+    // process start: a `--help` should not spawn a login shell.
+    let resolver = Resolver::current();
+    match &args.engine_path {
+        Some(path) => resolver.with_explicit_path(spec.id, path),
+        None => resolver,
+    }
+}
+
+/// Arguments an engine needs at run time rather than from the table. Only the
+/// fake engine has any: its script.
+fn extra_args(spec: &EngineSpec, args: &LaunchArgs) -> Result<Vec<String>> {
+    if spec.id != "fake" {
+        if args.script.is_some() {
+            bail!("--script only applies to the fake engine");
+        }
+        return Ok(Vec::new());
     }
     let script = args
         .script
@@ -172,28 +276,99 @@ fn launch_spec(args: &PromptArgs, cwd: &std::path::Path) -> Result<LaunchSpec> {
     // user typed the command would resolve against the wrong directory.
     let script = eavery_core::paths::canonicalize(script)
         .with_context(|| format!("resolving {}", script.display()))?;
-
-    let mut spec = LaunchSpec::new("fake", fake_agent_path()?).cwd(cwd);
-    spec.args.push("--script".to_owned());
-    spec.args.push(script.to_string_lossy().into_owned());
-    Ok(spec)
+    Ok(vec![
+        "--script".to_owned(),
+        script.to_string_lossy().into_owned(),
+    ])
 }
 
-/// The fake agent ships beside this binary, which is where Cargo and every
-/// installer both put it.
-fn fake_agent_path() -> Result<PathBuf> {
-    let name = format!("eavery-fake-agent{}", std::env::consts::EXE_SUFFIX);
-    if let Some(dir) = std::env::current_exe()
-        .ok()
-        .and_then(|exe| exe.parent().map(PathBuf::from))
-    {
-        let beside = dir.join(&name);
-        if beside.exists() {
-            return Ok(beside);
+fn parse_env(pairs: &[String]) -> Result<Vec<(String, String)>> {
+    pairs
+        .iter()
+        .map(|pair| {
+            pair.split_once('=')
+                .map(|(name, value)| (name.to_owned(), value.to_owned()))
+                .with_context(|| format!("--env wants NAME=VALUE, got `{pair}`"))
+        })
+        .collect()
+}
+
+/// The "not installed" message, with everywhere that was looked. A user who is
+/// told an engine is missing is always told where Eavery looked for it.
+fn not_installed(spec: &EngineSpec, error: &eavery_engines::NotInstalled) -> anyhow::Error {
+    if error.needs_node {
+        return anyhow!(
+            "{} needs Node.js, which is not installed. {}",
+            spec.display_name,
+            eavery_engines::instructions::NEEDS_NODE
+        );
+    }
+    anyhow!(
+        "{} is not installed. {}\nLooked in:\n  {}",
+        spec.display_name,
+        spec.sign_in_instructions,
+        error.searched.join("\n  ")
+    )
+}
+
+async fn engines(args: EnginesArgs) -> Result<ExitCode> {
+    let env = parse_env(&args.launch.env)?;
+
+    let wanted: Vec<&'static EngineSpec> = match &args.engine {
+        Some(id) => vec![engine_spec(id)?],
+        None => eavery_engines::ENGINES
+            .iter()
+            .filter(|spec| args.all || spec.visible())
+            .filter(|spec| args.all || !spec.experimental)
+            // Checking the fake engine means spawning it, and without a script
+            // it can only fail. Nobody listing their assistants wants that row.
+            .filter(|spec| spec.id != "fake" || args.launch.script.is_some())
+            .collect(),
+    };
+
+    let mut checks = Vec::new();
+    for spec in wanted {
+        checks.push((
+            spec,
+            HealthOptions {
+                deep: args.deep,
+                extra_args: extra_args(spec, &args.launch)?,
+                env: env.clone(),
+            },
+        ));
+    }
+
+    let mut statuses = Vec::new();
+    for (spec, options) in checks {
+        let resolver = resolver_for(&args.launch, spec);
+        let (where_, status) = match resolver.resolve(spec) {
+            Ok(resolved) => (
+                Some((resolved.program.clone(), resolved.via)),
+                health::check_resolved(spec, &resolved, &options).await,
+            ),
+            Err(error) => (None, health::not_installed(spec, error)),
+        };
+        statuses.push((spec, where_, status));
+    }
+
+    if args.json {
+        println_flush(render::engines_json(&statuses)?);
+    } else {
+        for line in render::engines_table(&statuses) {
+            println_flush(line);
         }
     }
-    // Fall back to PATH, which is how it is found when it has been installed.
-    Ok(PathBuf::from(name))
+
+    // `--engine` is the question "can I use this one right now", and the shell
+    // should be able to act on the answer.
+    let ready = statuses
+        .iter()
+        .all(|(_, _, status)| matches!(status, EngineStatus::Ready { .. }));
+    Ok(if args.engine.is_some() && !ready {
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    })
 }
 
 /// One line of the transcript.

@@ -10,9 +10,14 @@ description = "Engine table, discovery and health checks."
 [dependencies]
 eavery-acp.workspace = true
 eavery-core.workspace = true
+directories.workspace = true
+futures.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+tempfile.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
-which.workspace = true
+
+[dev-dependencies]
+tracing-subscriber.workspace = true
