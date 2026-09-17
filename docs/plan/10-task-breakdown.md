@@ -149,8 +149,12 @@ Pass/fail lines are in `01-implementation-plan.md` §4. Code lives in
   `loose_object_count()` reports the number; the packing itself is not
   written, because reclaiming the space means deleting the loose copies once
   a pack holds them and libgit2 has no `gc` — see `CHANGELOG-plan.md`.
-- [ ] **M2-T06 (M)** `eavery-core::store`: SQLite open, migrations, CRUD for
-  projects/sessions/turns/events/checkpoints/audit/settings. Tests with a temp db.
+- [x] **M2-T06 (M)** `5f2b659` — `eavery-core::store`: SQLite open, migrations,
+  CRUD for projects/sessions/turns/events/checkpoints/audit/settings. Tests
+  with a temp db. The schema carries the rules rather than leaving them to the
+  callers: STRICT tables, foreign keys on (with the per-connection pragma the
+  cascades need), and two triggers that make the audit log append-only. See
+  `CHANGELOG-plan.md`.
 - [ ] **M2-T07 (M)** `eavery-core::turn` state machine in **direct mode only**
   (no plan gate yet): pre-checkpoint → prompt → post-checkpoint → digest.
   Permission handler = allow reads/reversible, ask via callback for the rest.
