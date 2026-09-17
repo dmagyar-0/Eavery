@@ -164,7 +164,7 @@ Pass/fail lines are in `01-implementation-plan.md` §4. Code lives in
   drive a scripted in-process `Engine` rather than the fake agent binary,
   since core must not depend on `eavery-acp`; the fake agent covers the same
   ground through the CLI in M2-T08. See `CHANGELOG-plan.md`.
-- [x] **M2-T08 (M)** `<pending>` — CLI: `project open <dir>`, `project list`,
+- [x] **M2-T08 (M)** `8107ee1` — CLI: `project open <dir>`, `project list`,
   `run --project <id> --engine <id> "<text>"`, `history --project <id>`,
   `undo --project <id> [--to <cp>]`, `diff --project <id> <from> [<to>]`.
   `--project` takes the folder as well as the id, `--to` takes the short
@@ -177,11 +177,19 @@ Pass/fail lines are in `01-implementation-plan.md` §4. Code lives in
 
 ## M3 — Desktop shell (Developer mode)
 
-- [ ] **M3-T01 (M)** `pnpm create tauri-app` (react-ts) into `apps/desktop`;
-  add `src-tauri` to the workspace; app builds and shows a window on all three
-  OSes in CI (build only, no run).
-- [ ] **M3-T02 (M)** `ts-rs` bindings generation into `apps/desktop/src/types.ts`
-  via a `cargo test` in `eavery-core`; CI fails if the generated file is stale.
+- [x] **M3-T01 (M)** `<pending>` — `pnpm create tauri-app` (react-ts) into
+  `apps/desktop`; `src-tauri` added to the workspace as `eavery-desktop`;
+  `cargo build --workspace` builds it on Linux here and CI builds it on all
+  three OSes. CI gained the pnpm and Node steps it needs, because the crate
+  embeds `apps/desktop/dist` at compile time. Tauri's release profile moved to
+  the root manifest (a profile in a member is ignored) without its
+  `panic = "abort"`; see `CHANGELOG-plan.md`.
+- [x] **M3-T02 (M)** `<pending>` — `ts-rs` bindings generated into
+  `apps/desktop/src/types.ts` by `cargo test -p eavery-core`, which rewrites
+  the file and fails when that changed anything, so CI fails on a stale one.
+  Built by walking `TS::visit_dependencies` from the IPC surface's types
+  rather than with `#[ts(export)]`, which writes one file per type; see
+  `CHANGELOG-plan.md`.
 - [ ] **M3-T03 (M)** Tauri state: an `AppCore` struct wrapping store, journal
   cache, engine registry, event broadcast; `core://event` emission with `seq`.
 - [ ] **M3-T04 (L)** Commands from `03-architecture.md` §7: projects, engines,

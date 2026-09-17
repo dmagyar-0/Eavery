@@ -80,6 +80,7 @@ anything where reality differed from the plan is in
 | `eavery-fake-agent` | A scriptable ACP agent. The primary test double. |
 | `eavery-cli` | Headless driver. Every core feature is built here before the GUI. |
 | `eavery-docs-mcp` | The document Connector. Arrives in M6. |
+| `apps/desktop` | The Tauri v2 shell. The window and the generated types are in; the screens are M3. |
 
 ## Shape of the thing
 

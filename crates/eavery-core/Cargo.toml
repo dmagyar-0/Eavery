@@ -24,3 +24,6 @@ uuid.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+# The bindings test drives ts-rs directly rather than through `#[ts(export)]`,
+# so it can put every type in one file.
+ts-rs.workspace = true
