@@ -4,13 +4,16 @@ An open-source, local-first **desktop agent for everyday office work** — built
 Rust, provider-neutral, with every action explained before it happens and
 reversible after.
 
-> Status: **M2 done, bar its exit test against a real engine.** The Rust
-> workspace, the scriptable ACP test agent, the ACP client, the engine table
-> and health checks, the git-backed Journal, the store, the turn engine and
-> the headless CLI are in and tested. From a terminal you can already open a
-> folder, ask an assistant to change it, see what changed, and undo it. The
-> plan lives in [`docs/plan/`](docs/plan/00-README.md) and the task list with
-> it.
+> Status: **M2 done bar its exit test against a real engine; M3 is the
+> desktop shell, and its plumbing is in.** The Rust workspace, the scriptable
+> ACP test agent, the ACP client, the engine table and health checks, the
+> git-backed Journal, the store, the turn engine and the headless CLI are in
+> and tested, and so is the desktop app's whole IPC surface — twenty-one
+> commands, the event stream, and the frontend's generated types. From a
+> terminal you can already open a folder, ask an assistant to change it, see
+> what changed, and undo it. The window itself is still a placeholder: the
+> screens are M3-T06 to M3-T08. The plan lives in
+> [`docs/plan/`](docs/plan/00-README.md) and the task list with it.
 
 ## The thesis
 

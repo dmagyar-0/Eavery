@@ -172,6 +172,12 @@ Pass/fail lines are in `01-implementation-plan.md` §4. Code lives in
   `EAVERY_DATA_DIR`) keeps the tests out of the real data directory.
 - [ ] **M2-T09 (S)** M2 exit test against a real engine, byte-compare with
   `diff -r` (or a Rust helper), recorded below with the engine used.
+  **Blocked on the same thing as M1-T04 to M1-T07**: an engine with a working
+  login. The equivalent test against the fake engine passes as part of the CLI
+  suite (`crates/eavery-cli/tests/project.rs`,
+  `a_turn_changes_the_folder_and_undo_puts_it_back`), including the
+  byte-for-byte check that Undo puts the folder back; what is missing is a run
+  where the model is real.
 
 **M2 exit recorded:** ______
 
