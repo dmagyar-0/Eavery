@@ -471,16 +471,10 @@ impl ProjectRunner {
     ) -> Result<(Checkpoint, Vec<PathBuf>), TurnError> {
         let _guard = self.claim(Busy::GoingBack)?;
 
-        let journal = Arc::clone(&self.journal);
-        let target_id = target.clone();
-        let (checkpoint, locked) = blocking(move || journal.restore(&target_id))
-            .await
-            .map_err(|source| TurnError::Restore { source })?;
+        let (checkpoint, locked) =
+            restore_without_session(&self.recorder.store, Arc::clone(&self.journal), target)
+                .await?;
 
-        // A restore leaves two new checkpoints behind: the one that preserved
-        // the work tree first (D16) and the restore itself. Both come back
-        // from the Journal, which is the one that knows.
-        self.sync_checkpoints(10).await?;
         self.recorder.emit_or_log(CoreEvent::Restored {
             to: target.clone(),
             new_checkpoint: checkpoint.id.clone(),
@@ -495,14 +489,7 @@ impl ProjectRunner {
     /// Brings the store's cache of checkpoints up to date with the Journal,
     /// which is the one that knows.
     pub async fn sync_checkpoints(&self, limit: usize) -> Result<Vec<Checkpoint>, TurnError> {
-        let journal = Arc::clone(&self.journal);
-        let checkpoints = blocking(move || journal.list(limit))
-            .await
-            .map_err(|source| TurnError::Checkpoint { source })?;
-        for checkpoint in &checkpoints {
-            self.recorder.store.upsert_checkpoint(checkpoint)?;
-        }
-        Ok(checkpoints)
+        sync_checkpoints(&self.recorder.store, Arc::clone(&self.journal), limit).await
     }
 
     /// Stops the engine process. The Project's history and transcript are on
@@ -654,8 +641,14 @@ impl ProjectRunner {
         ToolCallView {
             risk: classify(&call.kind, &call.locations, self.journal.root()),
             diff_summary: diff_summary(&call.diff_paths),
+            // An engine that gave no title still has to appear as something in
+            // the transcript, and its own id is the only thing left.
+            title: if call.title.is_empty() {
+                call.id.clone()
+            } else {
+                call.title
+            },
             id: call.id,
-            title: call.title,
             kind: if call.kind.is_empty() {
                 "other".to_owned()
             } else {
@@ -687,6 +680,46 @@ impl ProjectRunner {
         // risk than it was.
         view.risk = classify(&view.kind, &view.locations, self.journal.root());
     }
+}
+
+/// Going back with no engine attached.
+///
+/// Undo has to work whether or not an assistant is running — it is the button
+/// that makes everything else safe to try. The Journal and the store come out
+/// of this exactly as they do from [`ProjectRunner::restore`]; the one thing
+/// missing is the transcript entry, because with no conversation open there
+/// is no transcript to put it in. See `CHANGELOG-plan.md`.
+pub async fn restore_without_session(
+    store: &Store,
+    journal: Arc<Journal>,
+    target: &CheckpointId,
+) -> Result<(Checkpoint, Vec<PathBuf>), TurnError> {
+    let target_id = target.clone();
+    let restoring = Arc::clone(&journal);
+    let (checkpoint, locked) = blocking(move || restoring.restore(&target_id))
+        .await
+        .map_err(|source| TurnError::Restore { source })?;
+
+    // A restore leaves two checkpoints behind: the one that preserved the work
+    // tree first (D16) and the restore itself. Both come back from the
+    // Journal, which is the one that knows.
+    sync_checkpoints(store, journal, 10).await?;
+    Ok((checkpoint, locked))
+}
+
+/// Brings the store's cache of checkpoints up to date with the Journal.
+pub async fn sync_checkpoints(
+    store: &Store,
+    journal: Arc<Journal>,
+    limit: usize,
+) -> Result<Vec<Checkpoint>, TurnError> {
+    let checkpoints = blocking(move || journal.list(limit))
+        .await
+        .map_err(|source| TurnError::Checkpoint { source })?;
+    for checkpoint in &checkpoints {
+        store.upsert_checkpoint(checkpoint)?;
+    }
+    Ok(checkpoints)
 }
 
 /// Releases the Project when the turn (or the restore) ends, however it ends.

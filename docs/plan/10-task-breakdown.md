@@ -155,13 +155,21 @@ Pass/fail lines are in `01-implementation-plan.md` §4. Code lives in
   callers: STRICT tables, foreign keys on (with the per-connection pragma the
   cascades need), and two triggers that make the audit log append-only. See
   `CHANGELOG-plan.md`.
-- [ ] **M2-T07 (M)** `eavery-core::turn` state machine in **direct mode only**
-  (no plan gate yet): pre-checkpoint → prompt → post-checkpoint → digest.
-  Permission handler = allow reads/reversible, ask via callback for the rest.
-  One turn per Project (C13): a second `start_turn` while one runs returns
-  an error; `restore` is refused while a turn runs.
-- [ ] **M2-T08 (M)** CLI: `project open <dir>`, `project list`, `run --project <id> --engine <id> "<text>"`,
-  `history --project <id>`, `undo --project <id> [--to <cp>]`, `diff --project <id> <from> <to>`.
+- [x] **M2-T07 (M)** `4ee3fec` — `eavery-core::turn` state machine in **direct
+  mode only** (no plan gate yet): pre-checkpoint → prompt → post-checkpoint →
+  digest. Permission handler = allow reads/reversible, ask via callback for
+  the rest; it reclassifies first, because the ACP layer's risk class is a
+  guess made without the Project root. One turn per Project (C13): a second
+  `run_turn` while one runs returns an error, and so does `restore`. The tests
+  drive a scripted in-process `Engine` rather than the fake agent binary,
+  since core must not depend on `eavery-acp`; the fake agent covers the same
+  ground through the CLI in M2-T08. See `CHANGELOG-plan.md`.
+- [x] **M2-T08 (M)** `<pending>` — CLI: `project open <dir>`, `project list`,
+  `run --project <id> --engine <id> "<text>"`, `history --project <id>`,
+  `undo --project <id> [--to <cp>]`, `diff --project <id> <from> [<to>]`.
+  `--project` takes the folder as well as the id, `--to` takes the short
+  checkpoint form the tables print, and a global `--data-dir` (or
+  `EAVERY_DATA_DIR`) keeps the tests out of the real data directory.
 - [ ] **M2-T09 (S)** M2 exit test against a real engine, byte-compare with
   `diff -r` (or a Rust helper), recorded below with the engine used.
 

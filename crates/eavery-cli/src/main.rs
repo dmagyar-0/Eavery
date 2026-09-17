@@ -5,6 +5,7 @@
 //! these paths run in CI without a display.
 #![deny(unsafe_code)]
 
+mod project;
 mod render;
 
 use std::io::{IsTerminal, Write};
@@ -31,34 +32,120 @@ use tokio::sync::mpsc;
     disable_help_subcommand = true
 )]
 struct Cli {
+    /// Where Eavery keeps its database and its journals. Defaults to
+    /// `$EAVERY_DATA_DIR`, then to the platform's data directory
+    /// (`docs/plan/03-architecture.md` §8).
+    #[arg(long, global = true, value_name = "PATH")]
+    data_dir: Option<PathBuf>,
+
     #[command(subcommand)]
     command: Command,
 }
 
 #[derive(Subcommand, Debug)]
 enum Command {
-    /// Send one request to an engine and print what it does.
+    /// Send one request to an engine and print what it does. No Project, no
+    /// history: this is the engine-level tool the ACP work was built with.
     Prompt(PromptArgs),
     /// Say which engines are installed on this computer and whether they work.
     Engines(EnginesArgs),
+    /// Open folders as Projects and list the ones already open.
+    #[command(subcommand)]
+    Project(ProjectCommand),
+    /// Run one turn in a Project: protect, do the work, protect, report.
+    Run(RunArgs),
+    /// The checkpoints of a Project, newest first.
+    History(HistoryArgs),
+    /// Go back to a checkpoint. Without `--to`, to the point before the last
+    /// turn.
+    Undo(UndoArgs),
+    /// What changed between two checkpoints, or since one.
+    Diff(DiffArgs),
+}
+
+#[derive(Subcommand, Debug)]
+enum ProjectCommand {
+    /// Open a folder as a Project, protecting it from now on.
+    Open {
+        /// The folder.
+        path: PathBuf,
+        /// What to call it. Defaults to the folder's own name.
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// Every Project that has been opened.
+    List,
+}
+
+#[derive(Parser, Debug)]
+pub struct RunArgs {
+    /// The Project: its id, or the folder itself.
+    #[arg(long)]
+    pub project: String,
+
+    /// Which engine to drive.
+    #[arg(long, default_value = "fake")]
+    pub engine: String,
+
+    #[command(flatten)]
+    pub launch: LaunchArgs,
+
+    /// Answer every permission request this way instead of asking.
+    #[arg(long, value_parser = ["allow", "reject"])]
+    pub answer: Option<String>,
+
+    /// The request to send.
+    pub request: String,
+}
+
+#[derive(Parser, Debug)]
+struct HistoryArgs {
+    #[arg(long)]
+    project: String,
+
+    /// How many checkpoints to show.
+    #[arg(long, default_value_t = 20)]
+    limit: usize,
+}
+
+#[derive(Parser, Debug)]
+struct UndoArgs {
+    #[arg(long)]
+    project: String,
+
+    /// The checkpoint to go back to. The first few characters are enough.
+    #[arg(long)]
+    to: Option<String>,
+}
+
+#[derive(Parser, Debug)]
+struct DiffArgs {
+    #[arg(long)]
+    project: String,
+
+    /// The checkpoint to compare from.
+    from: String,
+
+    /// The checkpoint to compare with. Left out, the folder as it is now.
+    to: Option<String>,
 }
 
 /// How to find and start an engine, shared by `prompt` and `engines`.
 #[derive(Args, Debug, Default)]
-struct LaunchArgs {
+pub struct LaunchArgs {
     /// The fake engine's script (`docs/plan/11-testing-ci.md` §2).
     #[arg(long)]
-    script: Option<PathBuf>,
+    pub script: Option<PathBuf>,
 
     /// Use this executable instead of searching for one. The command-line
     /// equivalent of Settings → Assistants → path.
     #[arg(long, value_name = "PATH")]
-    engine_path: Option<PathBuf>,
+    pub engine_path: Option<PathBuf>,
 
     /// Extra environment for the engine child only, `NAME=VALUE`. Repeatable.
     /// This is how goose is told which provider and model to use.
     #[arg(long, value_name = "NAME=VALUE")]
-    env: Vec<String>,
+    pub env: Vec<String>,
 }
 
 #[derive(Parser, Debug)]
@@ -137,9 +224,20 @@ fn main() -> ExitCode {
 }
 
 async fn run(cli: Cli) -> Result<ExitCode> {
+    let data_dir = project::data_dir(cli.data_dir.as_ref())?;
     match cli.command {
         Command::Prompt(args) => prompt(args).await,
         Command::Engines(args) => engines(args).await,
+        Command::Project(ProjectCommand::Open { path, name }) => {
+            project::open(&data_dir, &path, name.as_deref()).await
+        }
+        Command::Project(ProjectCommand::List) => project::list(&data_dir),
+        Command::Run(args) => project::run(&data_dir, &args).await,
+        Command::History(args) => project::history(&data_dir, &args.project, args.limit).await,
+        Command::Undo(args) => project::undo(&data_dir, &args.project, args.to.as_deref()).await,
+        Command::Diff(args) => {
+            project::diff(&data_dir, &args.project, &args.from, args.to.as_deref()).await
+        }
     }
 }
 
@@ -151,7 +249,11 @@ async fn prompt(args: PromptArgs) -> Result<ExitCode> {
     let cwd = eavery_core::paths::canonicalize(&cwd)
         .with_context(|| format!("{} is not a folder", cwd.display()))?;
 
-    let engine = Arc::new(AcpEngine::new(launch_spec(&args, &cwd)?));
+    let engine = Arc::new(AcpEngine::new(launch_spec(
+        &args.engine,
+        &args.launch,
+        &cwd,
+    )?));
 
     let info = engine.start().await.context("starting the engine")?;
     render::engine_started(&info);
@@ -202,14 +304,18 @@ async fn prompt(args: PromptArgs) -> Result<ExitCode> {
     Ok(code)
 }
 
-fn launch_spec(args: &PromptArgs, cwd: &std::path::Path) -> Result<LaunchSpec> {
-    let spec = engine_spec(&args.engine)?;
+pub fn launch_spec(
+    engine: &str,
+    launch_args: &LaunchArgs,
+    cwd: &std::path::Path,
+) -> Result<LaunchSpec> {
+    let spec = engine_spec(engine)?;
     // The arguments are checked before anything is looked for: a command that
     // was typed wrong says so, whatever happens to be installed.
-    let extra_args = extra_args(spec, &args.launch)?;
-    let env = parse_env(&args.launch.env)?;
+    let extra_args = extra_args(spec, launch_args)?;
+    let env = parse_env(&launch_args.env)?;
 
-    let resolver = resolver_for(&args.launch, spec);
+    let resolver = resolver_for(launch_args, spec);
     let resolved = resolver
         .resolve(spec)
         .map_err(|error| not_installed(spec, &error))?;
@@ -430,8 +536,50 @@ fn permission_handler(
     })
 }
 
-/// Asks on the terminal. Reading a line blocks, so it runs on the blocking
-/// pool: the event stream keeps printing while the answer is pending.
+/// Answers one permission request, for the commands that print directly
+/// rather than through the transcript queue: from `--answer` when it was
+/// given, otherwise from the terminal.
+///
+/// The turn engine calls this in the middle of a turn, from the same task that
+/// prints the events, so the question is already in its place in the
+/// transcript by the time it is asked.
+pub async fn answer_permission(view: &PermissionView, fixed: Option<&str>) -> Decision {
+    match fixed {
+        Some("allow") => return Decision::AllowOnce,
+        Some("reject") => return Decision::RejectOnce,
+        _ => {}
+    }
+    if !std::io::stdin().is_terminal() {
+        // Nobody is there to say yes. Saying it for them is exactly what must
+        // never happen.
+        println_flush(render::permission_unattended(view));
+        return Decision::RejectOnce;
+    }
+    println_flush("         [a]llow / [r]eject:");
+    read_answer().await
+}
+
+/// Reads one line from the terminal. Reading blocks, so it runs on the
+/// blocking pool: whatever else is streaming keeps streaming.
+async fn read_answer() -> Decision {
+    let answer = tokio::task::spawn_blocking(|| {
+        let mut line = String::new();
+        std::io::stdin().read_line(&mut line).map(|_| line)
+    })
+    .await;
+
+    match answer {
+        Ok(Ok(line)) => match line.trim().to_lowercase().as_str() {
+            "a" | "allow" | "y" | "yes" => Decision::AllowOnce,
+            "r" | "reject" | "n" | "no" => Decision::RejectOnce,
+            // Anything else, including an empty line, is not consent.
+            _ => Decision::RejectOnce,
+        },
+        _ => Decision::RejectOnce,
+    }
+}
+
+/// Asks on the terminal, through the transcript queue that `prompt` uses.
 async fn ask_in_terminal(view: &PermissionView, lines: &mpsc::UnboundedSender<Line>) -> Decision {
     if !std::io::stdin().is_terminal() {
         // Nobody is there to say yes. Saying it for them is exactly what must
@@ -449,22 +597,7 @@ async fn ask_in_terminal(view: &PermissionView, lines: &mpsc::UnboundedSender<Li
         return Decision::RejectOnce;
     }
     let _ = on_screen.await;
-
-    let answer = tokio::task::spawn_blocking(|| {
-        let mut line = String::new();
-        std::io::stdin().read_line(&mut line).map(|_| line)
-    })
-    .await;
-
-    match answer {
-        Ok(Ok(line)) => match line.trim().to_lowercase().as_str() {
-            "a" | "allow" | "y" | "yes" => Decision::AllowOnce,
-            "r" | "reject" | "n" | "no" => Decision::RejectOnce,
-            // Anything else, including an empty line, is not consent.
-            _ => Decision::RejectOnce,
-        },
-        _ => Decision::RejectOnce,
-    }
+    read_answer().await
 }
 
 /// Flushes stdout after each line so the stream is watchable when it is piped.

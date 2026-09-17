@@ -243,7 +243,9 @@ name = "eavery-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "clap",
+ "directories",
  "eavery-acp",
  "eavery-core",
  "eavery-engines",
@@ -252,6 +254,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]
