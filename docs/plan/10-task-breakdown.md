@@ -190,13 +190,13 @@ Pass/fail lines are in `01-implementation-plan.md` §4. Code lives in
   Built by walking `TS::visit_dependencies` from the IPC surface's types
   rather than with `#[ts(export)]`, which writes one file per type; see
   `CHANGELOG-plan.md`.
-- [x] **M3-T03 (M)** `<pending>` — Tauri state: `AppCore` wrapping the store,
+- [x] **M3-T03 (M)** `09c7022` — Tauri state: `AppCore` wrapping the store,
   a Journal per open Project, an engine per Project that has run a turn, the
   health-check cache, the `core://event` emission (the payload is a
   `StoredEvent`, so it carries `seq`), an in-process broadcast of the same
   events for anything without a webview, and the permission desk that
   `answer_permission` resolves.
-- [x] **M3-T04 (L)** `<pending>` — Commands from `03-architecture.md` §7:
+- [x] **M3-T04 (L)** `09c7022` — Commands from `03-architecture.md` §7:
   projects, engines, `start_turn` (direct only; `mode: "plan"` is refused
   until M4), `answer_permission`, `cancel_turn`, checkpoints,
   `restore_checkpoint`, `diff_summary`, `list_events`, `list_audit`,
@@ -205,7 +205,7 @@ Pass/fail lines are in `01-implementation-plan.md` §4. Code lives in
   mock runtime, which needs no window and no display; that test is what found
   Undo and "protect this now" needing an engine started, both since fixed
   (`CHANGELOG-plan.md`).
-- [x] **M3-T09 (S)** `<pending>` — Kill children on exit: `RunEvent::Exit`
+- [x] **M3-T09 (S)** `09c7022` — Kill children on exit: `RunEvent::Exit`
   shuts every engine down. Done here because M3-T03 is where the runners
   became reachable from the exit handler.
 - [ ] **M3-T05 (M)** Frontend `ipc.ts`, `events.ts`, `store.ts` with gap re-fetch.
