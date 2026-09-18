@@ -85,3 +85,12 @@ jobs:
             Write-Host "no WebView2Loader.dll anywhere under target"
           }
       - run: cargo test --workspace
+      # When a Windows test binary exits 0xc0000139 before running a line,
+      # the OS does not say which import it could not resolve. This asks the
+      # loader the same question one import at a time and prints the answer.
+      - name: Say which import the Windows test binaries cannot resolve
+        if: failure() && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          python -m pip install --quiet pefile
+          python .github/scripts/unresolved_imports.py target\debug\deps
