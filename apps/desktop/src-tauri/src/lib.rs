@@ -52,25 +52,59 @@ pub fn register<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder
         commands::list_sessions,
         commands::list_audit,
         commands::journal_size,
+        commands::journal_info,
         commands::unprotected_files,
         commands::get_settings,
         commands::set_settings,
+        commands::diagnostics,
     ])
+}
+
+/// Sends `tracing` to stderr and to `<data_dir>/logs/eavery.log`
+/// (`docs/plan/03-architecture.md` §9). The file is what the Diagnostics
+/// panel reads; stderr is for whoever launched the app from a terminal.
+///
+/// When the file cannot be opened the app still starts, logging to stderr
+/// alone and saying so there: a log that cannot be written is not a reason to
+/// refuse to run.
+fn init_logging(data_dir: Option<&std::path::Path>) {
+    use tracing_subscriber::fmt::writer::MakeWriterExt;
+
+    let filter = tracing_subscriber::EnvFilter::try_from_env("EAVERY_LOG")
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+
+    let log_file = data_dir.and_then(|dir| match eavery_core::diagnostics::open_log(dir) {
+        Ok(file) => Some(file),
+        Err(error) => {
+            eprintln!(
+                "eavery: could not open the log at {}: {error}",
+                eavery_core::diagnostics::log_path(dir).display()
+            );
+            None
+        }
+    });
+
+    match log_file {
+        Some(file) => tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .with_ansi(false)
+            .with_writer(std::io::stderr.and(std::sync::Mutex::new(file)))
+            .init(),
+        None => tracing_subscriber::fmt().with_env_filter(filter).init(),
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_env("EAVERY_LOG")
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .init();
+    let data_dir = data_dir();
+    init_logging(data_dir.as_deref());
+    tracing::info!(version = env!("CARGO_PKG_VERSION"), "Eavery starting");
 
     register(tauri::Builder::default())
         .plugin(tauri_plugin_opener::init())
-        .setup(|app| {
-            let data_dir = data_dir().ok_or("this system has no data directory")?;
+        .plugin(tauri_plugin_dialog::init())
+        .setup(move |app| {
+            let data_dir = data_dir.ok_or("this system has no data directory")?;
             let core = AppCore::open(data_dir, Some(app.handle().clone()))?;
             app.manage(core);
             Ok(())

@@ -43,8 +43,10 @@ const PROTOCOL_VERSION: u16 = 1;
 struct Args {
     /// The JSON script to replay. Without one the agent answers `initialize`
     /// and `session/new` and refuses every prompt, which is enough for a
-    /// shallow health check.
-    #[arg(long)]
+    /// shallow health check. `EAVERY_FAKE_SCRIPT` is the same thing for a
+    /// launcher that cannot pass arguments — the desktop app, which starts
+    /// every engine the same way.
+    #[arg(long, env = "EAVERY_FAKE_SCRIPT")]
     script: Option<PathBuf>,
 }
 

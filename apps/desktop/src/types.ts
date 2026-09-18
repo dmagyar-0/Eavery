@@ -73,6 +73,21 @@ export type DecidedBy = "policy" | "user" | "plan_gate";
 export type Decision = "allow_once" | "allow_always" | "reject_once" | "reject_always" | "cancelled";
 
 /**
+ * What the Diagnostics panel shows (`07-ui-vocabulary.md` §3): where the
+ * data lives, where the log is, and the end of it.
+ */
+export type Diagnostics = { 
+/**
+ * Eavery's own version, from the crate that built the app.
+ */
+version: string, data_dir: string, log_path: string, 
+/**
+ * The last lines of the log, oldest first. Empty when there is no log
+ * yet, which is not an error: a first run has nothing to say.
+ */
+log_tail: Array<string>, };
+
+/**
  * What a turn actually did, in file terms.
  */
 export type Digest = { files_added: Array<string>, files_changed: Array<string>, files_removed: Array<string>, 
@@ -134,6 +149,17 @@ export type EngineStatus = { "state": "not_installed", instructions: string, sea
 current_mode: string | null, } | { "state": "unavailable", reason: string, };
 
 export type ErrorCode = "engine_unavailable" | "engine_timeout" | "engine_crashed" | "checkpoint_failed" | "restore_failed" | "file_locked" | "plan_gate_bypassed" | "turn_already_running" | "project_too_large" | "permission_timeout" | "internal";
+
+/**
+ * A Journal as Developer mode describes it: where it is, how much room it
+ * takes, and how many loose objects it has collected (C12).
+ */
+export type JournalInfo = { 
+/**
+ * The git directory, under Eavery's data folder — never inside the
+ * Project.
+ */
+path: string, size_bytes: number, loose_objects: number, };
 
 /**
  * An MCP server to hand the engine in `session/new`. "Connector" is the

@@ -38,7 +38,7 @@ agent-client-protocol = "2.0.0"
 # can co-resolve. Neither is used yet: M0-T06 took the hand-rolled §7 client.
 agent-client-protocol-schema = "=1.5.0"
 rmcp = { version = "3.2.0", features = ["server", "transport-io", "macros"] }
-clap = { version = "4.6.6", features = ["derive"] }
+clap = { version = "4.6.6", features = ["derive", "env"] }
 directories = "6.0.0"
 dunce = "1.0.5"
 async-trait = "0.1.92"
@@ -49,6 +49,7 @@ keyring = "4.2.0"
 tauri = { version = "2.9.3", features = [] }
 tauri-build = { version = "2.5.1", features = [] }
 tauri-plugin-opener = "2.5.2"
+tauri-plugin-dialog = "2.7.3"
 # Not used by discovery, which resolves against a `Platform` parameter so the
 # Windows rules can be tested from any OS (M1-T01, `CHANGELOG-plan.md`). Kept
 # for anything that only ever needs to look something up on the host.

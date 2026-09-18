@@ -334,3 +334,53 @@ fn a_project_can_be_forgotten_without_losing_its_folder() {
 
     drop(fixture.app);
 }
+
+/// Developer mode names the git directory; it lives under Eavery's data folder
+/// and never inside the Project (`05-git-journal.md` §1).
+#[test]
+fn the_journal_can_be_described() {
+    let fixture = Fixture::new();
+    let root = fixture.project_folder();
+    let project_id = fixture.ok("open_project", json!({ "path": root }))["id"].clone();
+
+    let info = fixture.ok("journal_info", json!({ "projectId": project_id }));
+    let path = info["path"].as_str().expect("a path");
+    assert!(
+        Path::new(path).starts_with(fixture.dir.path().join("data")),
+        "the history lives in the data folder: {path}"
+    );
+    assert!(!Path::new(path).starts_with(&root));
+    assert!(info["size_bytes"].as_u64().unwrap() > 0);
+    assert!(info["loose_objects"].as_u64().is_some());
+}
+
+/// The panel must answer on a fresh install, before anything has been logged,
+/// and say where things are even then.
+#[test]
+fn diagnostics_answer_before_there_is_a_log() {
+    let fixture = Fixture::new();
+    let diagnostics = fixture.ok("diagnostics", json!({}));
+    assert_eq!(diagnostics["version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(
+        Path::new(diagnostics["data_dir"].as_str().unwrap()),
+        fixture.dir.path().join("data")
+    );
+    assert!(
+        diagnostics["log_path"]
+            .as_str()
+            .unwrap()
+            .ends_with("eavery.log")
+    );
+    assert_eq!(diagnostics["log_tail"], json!([]));
+
+    // Once there is a log, the tail is the end of it.
+    let data_dir = fixture.dir.path().join("data");
+    let mut log = eavery_core::diagnostics::open_log(&data_dir).unwrap();
+    use std::io::Write;
+    for n in 1..=5 {
+        writeln!(log, "line {n}").unwrap();
+    }
+    drop(log);
+    let diagnostics = fixture.ok("diagnostics", json!({ "lines": 2 }));
+    assert_eq!(diagnostics["log_tail"], json!(["line 4", "line 5"]));
+}

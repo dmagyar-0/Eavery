@@ -8,9 +8,10 @@
 //! Errors come back as `AppError` — a code, a message, and the next action —
 //! so a failure reaches the person as something to do about it.
 
+use eavery_core::diagnostics::{self, Diagnostics};
 use eavery_core::error::AppError;
 use eavery_core::event::{Decision, ErrorCode};
-use eavery_core::journal::{self, ChangeSet, Unprotected};
+use eavery_core::journal::{self, ChangeSet, JournalInfo, Unprotected};
 use eavery_core::model::{
     Checkpoint, CheckpointId, EngineListing, EngineStatus, Project, ProjectId, Session, SessionId,
     Settings, Turn, TurnId,
@@ -351,6 +352,19 @@ pub async fn journal_size(
         .map_err(|error| AppError::internal(format!("measuring the history: {error}")))??)
 }
 
+/// Where the Project's history is kept and how big it has got. Developer
+/// mode shows it; Everyday mode never names a git directory.
+#[tauri::command]
+pub async fn journal_info(
+    core: State<'_, AppCore>,
+    project_id: ProjectId,
+) -> Result<JournalInfo, AppError> {
+    let journal = core.journal(project_id).await?;
+    Ok(tokio::task::spawn_blocking(move || journal.info())
+        .await
+        .map_err(|error| AppError::internal(format!("measuring the history: {error}")))??)
+}
+
 /// Everything in the Project that Undo does not cover, and why. This is what
 /// makes "your files are protected" a claim Eavery can always qualify.
 #[tauri::command]
@@ -374,4 +388,23 @@ pub fn get_settings(core: State<'_, AppCore>) -> Result<Settings, AppError> {
 #[tauri::command]
 pub fn set_settings(core: State<'_, AppCore>, settings: Settings) -> Result<(), AppError> {
     core.set_settings(&settings)
+}
+
+// ---- diagnostics -----------------------------------------------------------
+
+/// What the Diagnostics panel shows (`03-architecture.md` §9): the version,
+/// where the data and the log live, and the log's tail. Reading it never
+/// fails — the panel is for when something already has.
+#[tauri::command]
+pub async fn diagnostics(
+    core: State<'_, AppCore>,
+    lines: Option<usize>,
+) -> Result<Diagnostics, AppError> {
+    let data_dir = core.data_dir().to_path_buf();
+    let lines = lines.unwrap_or(diagnostics::DEFAULT_TAIL_LINES);
+    tokio::task::spawn_blocking(move || {
+        Diagnostics::read(&data_dir, env!("CARGO_PKG_VERSION"), lines)
+    })
+    .await
+    .map_err(|error| AppError::internal(format!("reading the log: {error}")))
 }
