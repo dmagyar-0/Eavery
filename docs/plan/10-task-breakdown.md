@@ -274,7 +274,7 @@ Pass/fail lines are in `01-implementation-plan.md` §4. Code lives in
   `eavery-plan` block as JSON, or the reply with its list items as steps.
   Tests for valid JSON, invalid JSON, the markdown-list fallback, the
   last-block rule, other fenced blocks, and an empty reply.
-- [x] **M4-T05 (L)** `PENDING` — Two-phase turn in `eavery-core::turn`:
+- [x] **M4-T05 (L)** `bf71530` — Two-phase turn in `eavery-core::turn`:
   `run_turn_in(TurnMode::Plan, ..)` goes Planning → AwaitingApproval →
   Executing, with the plan prompt under the gate (`Gatekeeper`: writes
   closed through `set_writes_allowed`, every mutation and every plan-mode
@@ -293,12 +293,12 @@ Pass/fail lines are in `01-implementation-plan.md` §4. Code lives in
   --plan [--approve yes|no] [--edits ..]`, the plan printed in full with
   "sends" and "forever" lines that always appear. Ten core tests, three CLI
   tests over real ACP; see `CHANGELOG-plan.md`.
-- [x] **M4-T06 (M)** `PENDING` — Every decision writes an audit row with
+- [x] **M4-T06 (M)** `bf71530` — Every decision writes an audit row with
   its actor: `plan_gate` for each planning answer (with `plan_exit`),
   `user` for `plan_approved` (with the edits) and `plan_rejected`, and
   `policy` / `user` for the execute phase as before, now with `phase` and
   `in_plan` in the detail. `list_audit` was in since M3-T04.
-- [x] **M4-T07 (M)** `PENDING` — `PlanCard` in the transcript: summary,
+- [x] **M4-T07 (M)** `bf71530` — `PlanCard` in the transcript: summary,
   steps, documents, "Would leave this computer" and "Could not be undone"
   (always shown, "Nothing" when empty), "Your documents are sent to
   {vendor}", the person's edits once approved, the raw reply in Developer
@@ -306,7 +306,7 @@ Pass/fail lines are in `01-implementation-plan.md` §4. Code lives in
   `approve_plan` / `reject_plan` commands over a `PlanDesk` keyed by turn;
   "Plan it" is the composer's primary button and Enter. "Always" storage
   was M4-T02's.
-- [x] **M4-T08 (M)** `PENDING` — `scripts/plan.json` (§7 tests 1 and 2 in
+- [x] **M4-T08 (M)** `bf71530` — `scripts/plan.json` (§7 tests 1 and 2 in
   one script: an edit refused, a `fs/write_text_file` refused, an
   `ExitPlanMode` refused, then the approved execute turn) and the CLI
   tests for it, plus §7 test 3 as a script in `crates/eavery-cli/tests`;
