@@ -12,8 +12,10 @@ import type {
   ChangeSet,
   Checkpoint,
   Decision,
+  Diagnostics,
   EngineListing,
   EngineStatus,
+  JournalInfo,
   Project,
   RestoreOutcome,
   Session,
@@ -131,6 +133,10 @@ export const listAudit = (projectId?: string, limit?: number) =>
 export const journalSize = (projectId: string) =>
   invoke<number>("journal_size", { projectId });
 
+/** Where the history lives and how big it is. Developer mode shows it. */
+export const journalInfo = (projectId: string) =>
+  invoke<JournalInfo>("journal_info", { projectId });
+
 export const unprotectedFiles = (projectId: string) =>
   invoke<Unprotected[]>("unprotected_files", { projectId });
 
@@ -140,3 +146,9 @@ export const getSettings = () => invoke<Settings>("get_settings");
 
 export const setSettings = (settings: Settings) =>
   invoke<void>("set_settings", { settings });
+
+// ---- diagnostics -----------------------------------------------------------
+
+/** The version, the folders, and the last `lines` lines of the log. */
+export const diagnostics = (lines?: number) =>
+  invoke<Diagnostics>("diagnostics", { lines });

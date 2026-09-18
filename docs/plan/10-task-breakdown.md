@@ -222,10 +222,27 @@ Pass/fail lines are in `01-implementation-plan.md` §4. Code lives in
   detected globally and repaired per session — `seq` is one counter shared by
   every Project, so a skip may be in a conversation that is not on screen; see
   `CHANGELOG-plan.md`.
-- [ ] **M3-T06 (L)** Screens: Home, Project (three panes), Settings (mode +
-  engines only). Raw strings acceptable but must go through `t()` from the start.
-- [ ] **M3-T07 (M)** `Transcript`, `ToolCallRow`, `PermissionDialog` (queue), `Checkpoints` with Undo/Redo.
-- [ ] **M3-T08 (S)** `Diagnostics` panel with log tail (tail the `tracing` file).
+- [x] **M3-T06 (L)** `c94b7b6` — Screens: Home (the Projects, the folder picker
+  through the dialog plugin, "Forget"), Project (three panes: Documents,
+  Conversation with the composer, Activity with its tabs), Settings (the
+  mode toggle, the default engine, every engine with its state chip and the
+  §5 copy, "Check again"). Every string goes through `t()` from
+  `vocab/dictionary.ts`, with both renderings. The Documents tree is M5-T04;
+  "Plan it" is present and disabled until M4. Two commands added
+  (`journal_info`, `diagnostics`); see `CHANGELOG-plan.md`.
+- [x] **M3-T07 (M)** `c94b7b6` — `Transcript` (events grouped into keyed rows,
+  streamed text appended to its row, row identity kept across re-renders),
+  `ToolCallRow` (one line in Everyday, raw kind/status/locations/risk in
+  Developer), `PermissionDialog` (modal, queued, focus-trapped, Esc = Don't,
+  destructive focuses Reject), `Digest` with its Undo, `Checkpoints` with the
+  "would change" preview, "Go back to this point", Undo of the last run, Redo
+  after a restore, and Cmd/Ctrl+Z outside a text field. Checked end to end
+  with the fake engine on a virtual display.
+- [x] **M3-T08 (S)** `c94b7b6` — `Diagnostics`: `tracing` now also writes
+  `<data_dir>/logs/eavery.log` (rotated at startup above 10 MB), and the
+  panel — in Settings and as an Activity tab, Developer mode only — shows the
+  version, the data folder, the log path and the last 200 lines, with "Copy
+  diagnostics".
 
 **M3 exit recorded:** ______
 

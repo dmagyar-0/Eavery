@@ -8,31 +8,58 @@
 
 import { useSyncExternalStore } from "react";
 import * as ipc from "./ipc";
+import * as os from "./os";
 import { createFeed, type Feed } from "./events";
+import { t } from "./vocab/t";
 import type {
   Checkpoint,
+  Diagnostics,
   EngineListing,
+  EngineStatus,
+  JournalInfo,
   PermissionView,
   Project,
   Settings,
   StoredEvent,
+  Turn,
+  Unprotected,
 } from "./types";
 
 export type Trouble = {
   message: string;
   nextAction: string | null;
+  /** The error code, when there was one. Developer mode shows it. */
+  code?: string;
 };
+
+/** Which screen is up (`07-ui-vocabulary.md` §1). Onboarding is M7. */
+export type Screen = "home" | "project" | "settings";
+
+/** What Redo would go back to: where the files were just before the last restore. */
+export type RedoPoint = { to: string; label: string };
 
 export type State = {
   /** True until the first load finishes, so the window can say nothing rather than "no projects". */
   loading: boolean;
+  screen: Screen;
   projects: Project[];
   projectId: string | null;
   /** The conversation on screen, if the Project has had one. */
   sessionId: string | null;
   transcript: StoredEvent[];
+  /** The conversation's turns, oldest first: what was asked, and what each one can be undone to. */
+  turns: Turn[];
   checkpoints: Checkpoint[];
+  /** What Undo does not cover in this Project, and why. */
+  unprotected: Unprotected[];
+  /** Where the Project's history is and how big it has got. Developer mode shows it. */
+  journal: JournalInfo | null;
+  /** Journal descriptions for the Home screen, by Project id. Developer mode only. */
+  journals: Record<string, JournalInfo>;
+  redo: RedoPoint | null;
   engines: EngineListing[];
+  /** Engines whose health check is running right now. */
+  checkingEngines: string[];
   settings: Settings;
   /** The turn running right now, if any. Stop is the only thing to do while it is. */
   turnId: string | null;
@@ -40,20 +67,29 @@ export type State = {
   asking: PermissionView[];
   /** The last thing that went wrong, as something to do about it. */
   trouble: Trouble | null;
+  diagnostics: Diagnostics | null;
 };
 
 const initial: State = {
   loading: true,
+  screen: "home",
   projects: [],
   projectId: null,
   sessionId: null,
   transcript: [],
+  turns: [],
   checkpoints: [],
+  unprotected: [],
+  journal: null,
+  journals: {},
+  redo: null,
   engines: [],
+  checkingEngines: [],
   settings: { mode: "everyday", default_engine: null },
   turnId: null,
   asking: [],
   trouble: null,
+  diagnostics: null,
 };
 
 let state: State = initial;
@@ -79,11 +115,16 @@ export function useStore(): State {
 /** Reports a failure as the next action, and keeps the window usable. */
 function stumbled(error: unknown) {
   const { message, nextAction } = ipc.explain(error);
-  set({ trouble: { message, nextAction } });
+  const code = ipc.isAppError(error) ? error.code : undefined;
+  set({ trouble: { message, nextAction, code } });
 }
 
 export function dismissTrouble() {
   set({ trouble: null });
+}
+
+export function go(screen: Screen) {
+  set({ screen });
 }
 
 // ---- the event feed --------------------------------------------------------
@@ -104,11 +145,14 @@ function react(event: StoredEvent) {
   const core = event.event;
   switch (core.type) {
     case "turn_started":
-      set({ turnId: core.turn_id });
+      set({ turnId: core.turn_id, redo: null });
+      void refreshTurns();
       break;
     case "turn_finished":
       set({ turnId: null, asking: [] });
       void refreshCheckpoints();
+      void refreshTurns();
+      void refreshProtection();
       break;
     case "permission_requested":
       set({ asking: [...state.asking, core.request] });
@@ -124,9 +168,16 @@ function react(event: StoredEvent) {
     case "restored":
       void refreshCheckpoints();
       break;
+    case "engine_crashed":
+      set({ turnId: null, asking: [] });
+      break;
     case "error":
       set({
-        trouble: { message: core.message, nextAction: core.next_action },
+        trouble: {
+          message: core.message,
+          nextAction: core.next_action,
+          code: core.code,
+        },
       });
       break;
     default:
@@ -166,6 +217,18 @@ export async function start() {
 
 // ---- projects --------------------------------------------------------------
 
+/** The folder picker, then the Project. Nothing happens when it is cancelled. */
+export async function chooseFolder() {
+  let path: string | null;
+  try {
+    path = await os.pickFolder(t(state.settings.mode, "openFolder"));
+  } catch (error) {
+    stumbled(error);
+    return;
+  }
+  if (path) await openProject(path);
+}
+
 export async function openProject(path: string) {
   try {
     const project = await ipc.openProject(path);
@@ -179,7 +242,19 @@ export async function openProject(path: string) {
 export async function selectProject(projectId: string) {
   if (state.sessionId && feed) feed.unwatch(state.sessionId);
   reactedTo = 0;
-  set({ projectId, sessionId: null, transcript: [], checkpoints: [] });
+  set({
+    projectId,
+    screen: "project",
+    sessionId: null,
+    transcript: [],
+    turns: [],
+    checkpoints: [],
+    unprotected: [],
+    journal: null,
+    redo: null,
+    turnId: null,
+    asking: [],
+  });
 
   try {
     const [sessions, checkpoints] = await Promise.all([
@@ -193,8 +268,9 @@ export async function selectProject(projectId: string) {
     const session = sessions.at(0);
     if (session && feed) {
       set({ sessionId: session.id });
-      await feed.watch(session.id);
+      await Promise.all([feed.watch(session.id), refreshTurns()]);
     }
+    await refreshProtection();
   } catch (error) {
     stumbled(error);
   }
@@ -204,12 +280,63 @@ export async function forgetProject(projectId: string) {
   try {
     await ipc.removeProject(projectId);
     const projects = await ipc.listProjects();
+    if (state.projectId === projectId && state.sessionId && feed) {
+      feed.unwatch(state.sessionId);
+    }
     set({
       projects,
       ...(state.projectId === projectId
-        ? { projectId: null, sessionId: null, transcript: [], checkpoints: [] }
+        ? {
+            projectId: null,
+            sessionId: null,
+            transcript: [],
+            turns: [],
+            checkpoints: [],
+            unprotected: [],
+            journal: null,
+            redo: null,
+          }
         : {}),
     });
+  } catch (error) {
+    stumbled(error);
+  }
+}
+
+export async function chooseProjectEngine(projectId: string, engineId: string) {
+  try {
+    await ipc.setProjectEngine(projectId, engineId);
+    set({ projects: await ipc.listProjects() });
+  } catch (error) {
+    stumbled(error);
+  }
+}
+
+/** Where each Project's history lives, for the Home screen in Developer mode. */
+export async function describeJournals() {
+  const journals: Record<string, JournalInfo> = { ...state.journals };
+  for (const project of state.projects) {
+    try {
+      journals[project.id] = await ipc.journalInfo(project.id);
+    } catch {
+      // A Project whose folder has gone still has a row on Home; there is
+      // nothing to describe, and nothing to report either.
+    }
+  }
+  set({ journals });
+}
+
+/** What Undo does not cover, and how big the history is, for the Project on screen. */
+async function refreshProtection() {
+  const projectId = state.projectId;
+  if (!projectId) return;
+  try {
+    const [unprotected, journal] = await Promise.all([
+      ipc.unprotectedFiles(projectId),
+      ipc.journalInfo(projectId),
+    ]);
+    if (state.projectId !== projectId) return;
+    set({ unprotected, journal });
   } catch (error) {
     stumbled(error);
   }
@@ -232,6 +359,7 @@ export async function ask(request: string) {
         await feed.watch(session.id);
       }
     }
+    await refreshTurns();
   } catch (error) {
     stumbled(error);
   }
@@ -257,6 +385,29 @@ export async function answer(
   }
 }
 
+async function refreshTurns() {
+  const sessionId = state.sessionId;
+  if (!sessionId) return;
+  try {
+    const turns = await ipc.listTurns(sessionId);
+    if (state.sessionId !== sessionId) return;
+    turns.sort((a, b) => a.started_at.localeCompare(b.started_at));
+    set({ turns });
+  } catch (error) {
+    stumbled(error);
+  }
+}
+
+/** The last turn that finished, and can therefore be undone. */
+export function lastFinishedTurn(): Turn | null {
+  for (let i = state.turns.length - 1; i >= 0; i--) {
+    const turn = state.turns[i];
+    if (turn.id === state.turnId) continue;
+    if (turn.pre_checkpoint) return turn;
+  }
+  return null;
+}
+
 // ---- history ---------------------------------------------------------------
 
 export async function refreshCheckpoints() {
@@ -268,24 +419,44 @@ export async function refreshCheckpoints() {
   }
 }
 
+/**
+ * Goes back. Afterwards, Redo points at where the files were just before:
+ * the checkpoint immediately below the restore in the list, which is the
+ * "Before going back" one when there was anything to keep, and the previous
+ * head when there was not (`05-git-journal.md` §6, D16).
+ */
 export async function goBackTo(checkpointId: string) {
   if (!state.projectId) return;
   try {
     const outcome = await ipc.restoreCheckpoint(state.projectId, checkpointId);
-    await refreshCheckpoints();
+    const checkpoints = await ipc.listCheckpoints(state.projectId);
+    const at = checkpoints.findIndex((cp) => cp.id === outcome.checkpoint.id);
+    const before = at >= 0 ? checkpoints[at + 1] : undefined;
+    set({
+      checkpoints,
+      redo: before ? { to: before.id, label: before.label } : null,
+    });
     // Files something else held open are never quietly skipped.
     if (outcome.skipped_locked.length > 0) {
+      const mode = state.settings.mode;
       set({
         trouble: {
-          message: `These files were open, so they were left as they are: ${outcome.skipped_locked.join(", ")}`,
-          nextAction: "Close them and go back again.",
+          message: t(mode, "lockedFiles", {
+            files: outcome.skipped_locked.join(", "),
+          }),
+          nextAction: t(mode, "lockedFilesNext"),
         },
       });
     }
+    await refreshProtection();
   } catch (error) {
     stumbled(error);
   }
 }
+
+/** What changed, or would change, between a checkpoint and now. */
+export const changesSince = (checkpointId: string) =>
+  state.projectId ? ipc.diffSummary(state.projectId, checkpointId) : null;
 
 export async function protectNow(label: string) {
   if (!state.projectId) return;
@@ -307,10 +478,40 @@ export async function refreshEngines() {
   }
 }
 
+/** Checks one engine now, and replaces its row when the answer comes. */
+export async function checkEngine(engineId: string, deep = false) {
+  if (state.checkingEngines.includes(engineId)) return;
+  set({ checkingEngines: [...state.checkingEngines, engineId] });
+  try {
+    const status: EngineStatus = await ipc.runHealthCheck(engineId, deep);
+    set({
+      engines: state.engines.map((engine) =>
+        engine.id === engineId ? { ...engine, status } : engine,
+      ),
+    });
+  } catch (error) {
+    stumbled(error);
+  } finally {
+    set({
+      checkingEngines: state.checkingEngines.filter((id) => id !== engineId),
+    });
+  }
+}
+
 export async function saveSettings(settings: Settings) {
   try {
     await ipc.setSettings(settings);
     set({ settings });
+  } catch (error) {
+    stumbled(error);
+  }
+}
+
+// ---- diagnostics -----------------------------------------------------------
+
+export async function refreshDiagnostics() {
+  try {
+    set({ diagnostics: await ipc.diagnostics() });
   } catch (error) {
     stumbled(error);
   }

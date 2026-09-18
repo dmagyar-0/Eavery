@@ -13,10 +13,11 @@ use std::any::TypeId;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
+use eavery_core::diagnostics::Diagnostics;
 use eavery_core::engine::McpServerSpec;
 use eavery_core::error::AppError;
 use eavery_core::event::CoreEvent;
-use eavery_core::journal::{ChangeSet, ProjectScan, Unprotected};
+use eavery_core::journal::{ChangeSet, JournalInfo, ProjectScan, Unprotected};
 use eavery_core::model::{
     Checkpoint, EngineListing, EngineStatus, Project, Session, Settings, Turn,
 };
@@ -43,6 +44,8 @@ fn roots(collect: &mut Collect) {
     collect.visit::<Settings>();
     collect.visit::<RestoreOutcome>();
     collect.visit::<AppError>();
+    collect.visit::<JournalInfo>();
+    collect.visit::<Diagnostics>();
 }
 
 const HEADER: &str = "\

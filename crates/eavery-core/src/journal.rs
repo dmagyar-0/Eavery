@@ -730,6 +730,29 @@ impl Journal {
     pub fn size_on_disk(&self) -> Result<u64, JournalError> {
         Ok(directory_size(&self.git_dir))
     }
+
+    /// Where the history is and how big it has got: what Developer mode shows
+    /// on the Home screen and in Settings (`07-ui-vocabulary.md` §3).
+    pub fn info(&self) -> Result<JournalInfo, JournalError> {
+        Ok(JournalInfo {
+            path: self.git_dir.clone(),
+            size_bytes: self.size_on_disk()?,
+            loose_objects: self.loose_object_count(),
+        })
+    }
+}
+
+/// A Journal as Developer mode describes it: where it is, how much room it
+/// takes, and how many loose objects it has collected (C12).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+pub struct JournalInfo {
+    /// The git directory, under Eavery's data folder — never inside the
+    /// Project.
+    pub path: PathBuf,
+    #[ts(type = "number")]
+    pub size_bytes: u64,
+    #[ts(type = "number")]
+    pub loose_objects: usize,
 }
 
 /// What a folder holds, before Eavery commits to protecting it.
