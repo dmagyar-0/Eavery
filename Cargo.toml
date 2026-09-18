@@ -7,6 +7,7 @@ members = [
   "crates/eavery-docs-mcp",
   "crates/eavery-fake-agent",
   "crates/eavery-cli",
+  "apps/desktop/src-tauri",
 ]
 
 [workspace.package]
@@ -45,6 +46,9 @@ futures = "0.3.34"
 tempfile = "3.27.0"
 ts-rs = { version = "12.0.1", features = ["serde-compat", "uuid-impl", "chrono-impl"] }
 keyring = "4.2.0"
+tauri = { version = "2.9.3", features = [] }
+tauri-build = { version = "2.5.1", features = [] }
+tauri-plugin-opener = "2.5.2"
 # Not used by discovery, which resolves against a `Platform` parameter so the
 # Windows rules can be tested from any OS (M1-T01, `CHANGELOG-plan.md`). Kept
 # for anything that only ever needs to look something up on the host.
@@ -58,3 +62,13 @@ rust_xlsxwriter = "0.99.0"
 docx-rs = "0.4.22"
 pdf-extract = "0.12.0"
 lopdf = "0.44.0"
+
+# Tauri's size guidance (https://tauri.app/concept/size/). A profile in a
+# workspace member is ignored, so it lives here, and `panic = "abort"` is left
+# out of it deliberately: it is the one setting of the five that would stop
+# `cargo test --release` compiling at all.
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+strip = true

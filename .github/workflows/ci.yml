@@ -27,14 +27,50 @@ jobs:
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
-      # Tauri's Linux prerequisites. They are needed from M3 onward; installing
-      # them now keeps the workflow stable when apps/desktop joins the workspace.
+      # Tauri's Linux prerequisites.
       - name: Install Linux prerequisites
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libssl-dev libgtk-3-dev \
             libayatana-appindicator3-dev librsvg2-dev
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: apps/desktop/pnpm-lock.yaml
+      # The desktop crate embeds `apps/desktop/dist` at compile time, so the
+      # frontend is built before anything cargo does — including `cargo fmt`,
+      # which is cheap to run last but not worth a separate ordering rule.
+      - name: Build the desktop frontend
+        working-directory: apps/desktop
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace --no-run
+      # `tauri` links Windows' WebView2 loader even where the tests use its
+      # mock runtime, and `webview2-com-sys` puts `WebView2Loader.dll` next to
+      # the app binary in `target\debug`. A test executable runs from
+      # `target\debug\deps`, which is the directory Windows searches first, so
+      # without a copy there the loader binds to the system-wide DLL, whose
+      # exports do not match, and the test exits 0xc0000139 before running a
+      # line. The listing is deliberate: if the DLL ever moves, the log says
+      # where it went.
+      - name: Put the WebView2 loader beside the test binaries
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $found = Get-ChildItem -Path target -Recurse -Filter WebView2Loader.dll -ErrorAction SilentlyContinue
+          $found | ForEach-Object { Write-Host "found: $($_.FullName)" }
+          if ($found) {
+            Copy-Item -Path $found[0].FullName -Destination target\debug\deps\ -Force
+            Write-Host "copied to target\debug\deps"
+          } else {
+            Write-Host "no WebView2Loader.dll anywhere under target"
+          }
       - run: cargo test --workspace

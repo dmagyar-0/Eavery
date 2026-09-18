@@ -189,6 +189,50 @@ pub struct SessionMode {
     pub description: Option<String>,
 }
 
+/// One row of the Assistants screen: an engine from the table, and what a
+/// health check just said about it (`docs/plan/07-ui-vocabulary.md` §5).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+pub struct EngineListing {
+    pub id: String,
+    /// The engine's everyday name: "Claude Code", "On this computer".
+    pub display_name: String,
+    pub vendor: String,
+    /// Hidden unless Developer mode is on.
+    pub experimental: bool,
+    pub status: EngineStatus,
+    /// Where the executable was found. Developer mode shows it; Everyday mode
+    /// never does.
+    pub program: Option<String>,
+}
+
+/// Which vocabulary the app speaks, and what it does by default
+/// (`docs/plan/07-ui-vocabulary.md` §1).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum UiMode {
+    /// The default. No protocol words, no tool names, no paths where a file
+    /// name will do.
+    #[default]
+    Everyday,
+    Developer,
+}
+
+/// What the user has chosen. Small on purpose: anything that belongs to a
+/// Project lives on the Project, and secrets never live here at all — they go
+/// to the OS keychain (M7-T03).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(default)]
+pub struct Settings {
+    pub mode: UiMode,
+    /// The engine a new Project starts with.
+    pub default_engine: Option<String>,
+}
+
+impl Settings {
+    /// The key they are stored under in the settings table.
+    pub const KEY: &'static str = "settings";
+}
+
 /// The result of a health check, rendered by
 /// `docs/plan/07-ui-vocabulary.md` §5.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]

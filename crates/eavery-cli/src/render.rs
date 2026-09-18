@@ -7,8 +7,9 @@
 use std::path::PathBuf;
 
 use eavery_core::engine::{EngineError, OpenedSession, RawAgentEvent, StopReason};
-use eavery_core::event::{Decision, PermissionView};
-use eavery_core::model::{EngineInfo, EngineStatus};
+use eavery_core::event::{CoreEvent, Decision, Digest, PermissionView};
+use eavery_core::journal::{ChangeSet, Unprotected, UnprotectedReason};
+use eavery_core::model::{Checkpoint, CheckpointKind, EngineInfo, EngineStatus, Project};
 use eavery_engines::discovery::LaunchVia;
 use eavery_engines::spec::EngineSpec;
 
@@ -247,6 +248,209 @@ fn indent(text: &str) -> String {
     text.replace('\n', "\n         ")
 }
 
+// ---- the Project commands (M2-T08) -----------------------------------------
+
+/// One line per event, or nothing for the ones a terminal reader does not
+/// need: a checkpoint is shown by the commands that are about checkpoints.
+pub fn core_event(event: &CoreEvent) -> Option<String> {
+    Some(match event {
+        CoreEvent::TurnStarted { phase, .. } => format!("turn     started ({phase:?})"),
+        CoreEvent::PhaseChanged { phase, .. } => format!("phase    {phase:?}"),
+        CoreEvent::AgentText { text, .. } => format!("text     {}", indent(text)),
+        CoreEvent::AgentThought { text, .. } => format!("thought  {}", indent(text)),
+        CoreEvent::ToolCallStarted { call, .. } | CoreEvent::ToolCallUpdated { call, .. } => {
+            let where_ = if call.locations.is_empty() {
+                String::new()
+            } else {
+                format!("  {}", call.locations.join(", "))
+            };
+            format!(
+                "tool     [{}] {} ({}, {:?}){where_}",
+                call.status, call.title, call.kind, call.risk
+            )
+        }
+        CoreEvent::PlanUpdated { entries, .. } => {
+            let mut lines = vec![format!("plan     {} step(s)", entries.len())];
+            for entry in entries {
+                lines.push(format!(
+                    "           - [{}] {}",
+                    entry.status.as_deref().unwrap_or("pending"),
+                    entry.content
+                ));
+            }
+            lines.join("\n")
+        }
+        CoreEvent::PermissionRequested { request, .. } => format!(
+            "ask      {} ({:?})\n           {}",
+            request.title, request.risk, request.explanation
+        ),
+        CoreEvent::PermissionResolved { decision, by, .. } => {
+            format!("answer   {decision:?} (by {by:?})")
+        }
+        CoreEvent::PlanReady { plan, .. } => format!("plan     {}", plan.summary),
+        CoreEvent::CheckpointCreated { checkpoint } => {
+            format!("protect  {} {}", short(&checkpoint.id), checkpoint.label)
+        }
+        CoreEvent::Restored {
+            to, new_checkpoint, ..
+        } => format!("back to  {} (now at {})", short(to), short(new_checkpoint)),
+        CoreEvent::TurnFinished { stop_reason, .. } => format!("done     {stop_reason}"),
+        CoreEvent::EngineStatus { engine_id, status } => {
+            format!("engine   {engine_id} {}", state_word(status))
+        }
+        CoreEvent::EngineCrashed { stderr_tail, .. } => {
+            let mut lines = vec!["error    the engine stopped".to_owned()];
+            for line in stderr_tail {
+                lines.push(format!("stderr   {line}"));
+            }
+            lines.join("\n")
+        }
+        CoreEvent::Error {
+            message,
+            next_action,
+            ..
+        } => match next_action {
+            Some(next) => format!("error    {message}\nnext     {next}"),
+            None => format!("error    {message}"),
+        },
+    })
+}
+
+/// What the turn did. Always printed, including the empty lists: "nothing left
+/// this computer" is the line worth reading.
+pub fn digest(digest: &Digest) -> Vec<String> {
+    let mut lines = Vec::new();
+    for (label, files) in [
+        ("added", &digest.files_added),
+        ("changed", &digest.files_changed),
+        ("removed", &digest.files_removed),
+    ] {
+        for file in files {
+            lines.push(format!("{label:8} {file}"));
+        }
+    }
+    if digest.files_added.is_empty()
+        && digest.files_changed.is_empty()
+        && digest.files_removed.is_empty()
+    {
+        lines.push("files    nothing changed".to_owned());
+    }
+    lines.push(match digest.outbound_actions.as_slice() {
+        [] => "sent     nothing left this computer".to_owned(),
+        actions => format!("sent     {}", actions.join("; ")),
+    });
+    if !digest.refused_actions.is_empty() {
+        lines.push(format!("refused  {}", digest.refused_actions.join("; ")));
+    }
+    if let Some(undo_to) = &digest.undo_to {
+        lines.push(format!("undo     eavery-cli undo --to {}", short(undo_to)));
+    }
+    lines
+}
+
+pub fn projects_table(projects: &[Project]) -> Vec<String> {
+    let mut lines = Vec::new();
+    for project in projects {
+        lines.push(format!(
+            "{}  {}  {}",
+            project.id,
+            project.name,
+            project.root.display()
+        ));
+        if let Some(engine) = &project.engine_id {
+            lines.push(format!("{:38}engine: {engine}", ""));
+        }
+    }
+    lines
+}
+
+pub fn checkpoints_table(checkpoints: &[Checkpoint]) -> Vec<String> {
+    checkpoints
+        .iter()
+        .map(|checkpoint| {
+            format!(
+                "{}  {}  {:<9}  {} file(s)  {}",
+                short(&checkpoint.id),
+                checkpoint.created_at.format("%Y-%m-%d %H:%M"),
+                kind_word(checkpoint.kind),
+                checkpoint.files_changed,
+                checkpoint.label
+            )
+        })
+        .collect()
+}
+
+pub fn change_set(changes: &ChangeSet) -> Vec<String> {
+    let mut lines = Vec::new();
+    for (label, files) in [
+        ("added", &changes.added),
+        ("changed", &changes.changed),
+        ("removed", &changes.removed),
+    ] {
+        for file in files {
+            lines.push(format!("{label:8} {}", file.display()));
+        }
+    }
+    if lines.is_empty() {
+        lines.push("files    nothing changed".to_owned());
+    }
+    for (path, patch) in &changes.text_diffs {
+        lines.push(format!("--- {}", path.display()));
+        lines.push(patch.trim_end().to_owned());
+    }
+    lines
+}
+
+/// Everything Undo does not cover, and why. Printed on every `project open`,
+/// because "your files are protected" is a claim that has to be qualified the
+/// moment it is not completely true.
+pub fn unprotected(files: &[Unprotected]) -> Vec<String> {
+    if files.is_empty() {
+        return Vec::new();
+    }
+    let mut lines = vec![format!(
+        "note     {} file(s) are not protected by Undo:",
+        files.len()
+    )];
+    for file in files {
+        let why = match file.reason {
+            UnprotectedReason::TooLarge { bytes } => format!("over 50 MB ({})", self::bytes(bytes)),
+            UnprotectedReason::NotDownloaded => "not downloaded from the cloud yet".to_owned(),
+        };
+        lines.push(format!("           {}  — {why}", file.path.display()));
+    }
+    lines
+}
+
+/// The first eight characters of a commit, which is what a person types.
+pub fn short(id: &str) -> &str {
+    &id[..id.len().min(8)]
+}
+
+pub fn bytes(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut size = bytes as f64;
+    let mut unit = 0;
+    while size >= 1024.0 && unit < UNITS.len() - 1 {
+        size /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{bytes} {}", UNITS[0])
+    } else {
+        format!("{size:.1} {}", UNITS[unit])
+    }
+}
+
+fn kind_word(kind: CheckpointKind) -> &'static str {
+    match kind {
+        CheckpointKind::PreTurn => "before",
+        CheckpointKind::PostTurn => "after",
+        CheckpointKind::Manual => "manual",
+        CheckpointKind::Restore => "restore",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -255,5 +459,58 @@ mod tests {
     fn multi_line_text_stays_in_its_column() {
         assert_eq!(indent("one\ntwo"), "one\n         two");
         assert_eq!(indent("one"), "one");
+    }
+
+    /// The short form is what a person types back at `undo --to`, so it has
+    /// to work on a real commit id and not panic on anything shorter.
+    #[test]
+    fn a_checkpoint_is_shortened_to_something_typeable() {
+        assert_eq!(short("0123456789abcdef"), "01234567");
+        assert_eq!(short("abc"), "abc");
+        assert_eq!(short(""), "");
+    }
+
+    #[test]
+    fn sizes_are_readable() {
+        assert_eq!(bytes(0), "0 B");
+        assert_eq!(bytes(999), "999 B");
+        assert_eq!(bytes(1024), "1.0 KB");
+        assert_eq!(bytes(2 * 1024 * 1024 * 1024), "2.0 GB");
+    }
+
+    /// "Nothing left this computer" is the line the digest exists for, so it
+    /// is printed even when — especially when — there is nothing to say.
+    #[test]
+    fn a_digest_that_did_nothing_still_says_what_did_not_happen() {
+        let lines = digest(&Digest::default());
+        assert!(lines.iter().any(|line| line.contains("nothing changed")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("nothing left this computer"))
+        );
+    }
+
+    #[test]
+    fn a_digest_names_the_files_and_the_way_back() {
+        let lines = digest(&Digest {
+            files_changed: vec!["report.docx".into()],
+            outbound_actions: vec!["Email the report to finance".into()],
+            refused_actions: vec!["Run the backup script".into()],
+            undo_to: Some("0123456789abcdef".into()),
+            ..Digest::default()
+        });
+        assert!(lines.iter().any(|line| line == "changed  report.docx"));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("Email the report to finance"))
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("refused") && line.contains("backup"))
+        );
+        assert!(lines.iter().any(|line| line.contains("undo --to 01234567")));
     }
 }

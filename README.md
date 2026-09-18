@@ -4,8 +4,15 @@ An open-source, local-first **desktop agent for everyday office work** — built
 Rust, provider-neutral, with every action explained before it happens and
 reversible after.
 
-> Status: **M0 done.** The Rust workspace, the scriptable ACP test agent, the
-> ACP client and the headless CLI are in and tested; the plan lives in
+> Status: **M2 done bar its exit test against a real engine; M3 is the
+> desktop shell, and its plumbing is in.** The Rust workspace, the scriptable
+> ACP test agent, the ACP client, the engine table and health checks, the
+> git-backed Journal, the store, the turn engine and the headless CLI are in
+> and tested, and so is the desktop app's whole IPC surface — twenty-one
+> commands, the event stream, and the frontend's generated types. From a
+> terminal you can already open a folder, ask an assistant to change it, see
+> what changed, and undo it. The window itself is still a placeholder: the
+> screens are M3-T06 to M3-T08. The plan lives in
 > [`docs/plan/`](docs/plan/00-README.md) and the task list with it.
 
 ## The thesis
@@ -33,14 +40,36 @@ organisations, **>90% had nothing to do with software development**.
 cargo build --workspace
 cargo test --workspace
 
-# One prompt through the scriptable test agent, end to end.
+# Which assistants are on this computer, and would they work right now.
+cargo run -p eavery-cli -- engines
+
+# One prompt through the scriptable test agent, end to end. No Project, no
+# history: this is the engine-level tool.
 mkdir -p /tmp/demo && cargo run -p eavery-cli -- prompt --engine fake \
   --script crates/eavery-core/tests/scripts/hello.json \
   --cwd /tmp/demo "write some notes"
-
-# Which assistants are on this computer, and would they work right now.
-cargo run -p eavery-cli -- engines
 ```
+
+The whole loop, on a folder that is protected from the moment it is opened.
+Use a copy of a real folder, not the real one, until M2's exit test has been
+run against an engine you trust:
+
+```sh
+mkdir -p /tmp/project && echo FY25 > /tmp/project/report.txt
+
+cargo run -p eavery-cli -- project open /tmp/project
+cargo run -p eavery-cli -- run --project /tmp/project --engine fake \
+  --script crates/eavery-core/tests/scripts/hello.json "write some notes"
+
+cargo run -p eavery-cli -- history --project /tmp/project
+cargo run -p eavery-cli -- diff --project /tmp/project <checkpoint>
+cargo run -p eavery-cli -- undo --project /tmp/project
+```
+
+Swap `--engine fake --script ...` for `--engine goose` (or whatever
+`eavery-cli engines` says is ready) to drive a real assistant. The database
+and the journals live in the platform's data directory; `--data-dir` puts
+them somewhere else, which is what the tests do.
 
 Progress is tracked in [`docs/plan/10-task-breakdown.md`](docs/plan/10-task-breakdown.md);
 anything where reality differed from the plan is in
@@ -54,6 +83,7 @@ anything where reality differed from the plan is in
 | `eavery-fake-agent` | A scriptable ACP agent. The primary test double. |
 | `eavery-cli` | Headless driver. Every core feature is built here before the GUI. |
 | `eavery-docs-mcp` | The document Connector. Arrives in M6. |
+| `apps/desktop` | The Tauri v2 shell. The window and the generated types are in; the screens are M3. |
 
 ## Shape of the thing
 

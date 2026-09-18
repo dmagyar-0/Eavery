@@ -149,40 +149,83 @@ Pass/fail lines are in `01-implementation-plan.md` §4. Code lives in
   `loose_object_count()` reports the number; the packing itself is not
   written, because reclaiming the space means deleting the loose copies once
   a pack holds them and libgit2 has no `gc` — see `CHANGELOG-plan.md`.
-- [ ] **M2-T06 (M)** `eavery-core::store`: SQLite open, migrations, CRUD for
-  projects/sessions/turns/events/checkpoints/audit/settings. Tests with a temp db.
-- [ ] **M2-T07 (M)** `eavery-core::turn` state machine in **direct mode only**
-  (no plan gate yet): pre-checkpoint → prompt → post-checkpoint → digest.
-  Permission handler = allow reads/reversible, ask via callback for the rest.
-  One turn per Project (C13): a second `start_turn` while one runs returns
-  an error; `restore` is refused while a turn runs.
-- [ ] **M2-T08 (M)** CLI: `project open <dir>`, `project list`, `run --project <id> --engine <id> "<text>"`,
-  `history --project <id>`, `undo --project <id> [--to <cp>]`, `diff --project <id> <from> <to>`.
+- [x] **M2-T06 (M)** `5f2b659` — `eavery-core::store`: SQLite open, migrations,
+  CRUD for projects/sessions/turns/events/checkpoints/audit/settings. Tests
+  with a temp db. The schema carries the rules rather than leaving them to the
+  callers: STRICT tables, foreign keys on (with the per-connection pragma the
+  cascades need), and two triggers that make the audit log append-only. See
+  `CHANGELOG-plan.md`.
+- [x] **M2-T07 (M)** `4ee3fec` — `eavery-core::turn` state machine in **direct
+  mode only** (no plan gate yet): pre-checkpoint → prompt → post-checkpoint →
+  digest. Permission handler = allow reads/reversible, ask via callback for
+  the rest; it reclassifies first, because the ACP layer's risk class is a
+  guess made without the Project root. One turn per Project (C13): a second
+  `run_turn` while one runs returns an error, and so does `restore`. The tests
+  drive a scripted in-process `Engine` rather than the fake agent binary,
+  since core must not depend on `eavery-acp`; the fake agent covers the same
+  ground through the CLI in M2-T08. See `CHANGELOG-plan.md`.
+- [x] **M2-T08 (M)** `8107ee1` — CLI: `project open <dir>`, `project list`,
+  `run --project <id> --engine <id> "<text>"`, `history --project <id>`,
+  `undo --project <id> [--to <cp>]`, `diff --project <id> <from> [<to>]`.
+  `--project` takes the folder as well as the id, `--to` takes the short
+  checkpoint form the tables print, and a global `--data-dir` (or
+  `EAVERY_DATA_DIR`) keeps the tests out of the real data directory.
 - [ ] **M2-T09 (S)** M2 exit test against a real engine, byte-compare with
   `diff -r` (or a Rust helper), recorded below with the engine used.
+  **Blocked on the same thing as M1-T04 to M1-T07**: an engine with a working
+  login. The equivalent test against the fake engine passes as part of the CLI
+  suite (`crates/eavery-cli/tests/project.rs`,
+  `a_turn_changes_the_folder_and_undo_puts_it_back`), including the
+  byte-for-byte check that Undo puts the folder back; what is missing is a run
+  where the model is real.
 
 **M2 exit recorded:** ______
 
 ## M3 — Desktop shell (Developer mode)
 
-- [ ] **M3-T01 (M)** `pnpm create tauri-app` (react-ts) into `apps/desktop`;
-  add `src-tauri` to the workspace; app builds and shows a window on all three
-  OSes in CI (build only, no run).
-- [ ] **M3-T02 (M)** `ts-rs` bindings generation into `apps/desktop/src/types.ts`
-  via a `cargo test` in `eavery-core`; CI fails if the generated file is stale.
-- [ ] **M3-T03 (M)** Tauri state: an `AppCore` struct wrapping store, journal
-  cache, engine registry, event broadcast; `core://event` emission with `seq`.
-- [ ] **M3-T04 (L)** Commands from `03-architecture.md` §7: projects, engines,
-  `start_turn` (direct), `answer_permission`, `cancel_turn`, checkpoints,
-  `journal_size`, `list_events`, settings. Each command is a thin call into
-  `eavery-core`.
-- [ ] **M3-T05 (M)** Frontend `ipc.ts`, `events.ts`, `store.ts` with gap re-fetch.
+- [x] **M3-T01 (M)** `12e405c` — `pnpm create tauri-app` (react-ts) into
+  `apps/desktop`; `src-tauri` added to the workspace as `eavery-desktop`;
+  `cargo build --workspace` builds it on Linux here and CI builds it on all
+  three OSes. CI gained the pnpm and Node steps it needs, because the crate
+  embeds `apps/desktop/dist` at compile time. Tauri's release profile moved to
+  the root manifest (a profile in a member is ignored) without its
+  `panic = "abort"`; see `CHANGELOG-plan.md`.
+- [x] **M3-T02 (M)** `12e405c` — `ts-rs` bindings generated into
+  `apps/desktop/src/types.ts` by `cargo test -p eavery-core`, which rewrites
+  the file and fails when that changed anything, so CI fails on a stale one.
+  Built by walking `TS::visit_dependencies` from the IPC surface's types
+  rather than with `#[ts(export)]`, which writes one file per type; see
+  `CHANGELOG-plan.md`.
+- [x] **M3-T03 (M)** `09c7022` — Tauri state: `AppCore` wrapping the store,
+  a Journal per open Project, an engine per Project that has run a turn, the
+  health-check cache, the `core://event` emission (the payload is a
+  `StoredEvent`, so it carries `seq`), an in-process broadcast of the same
+  events for anything without a webview, and the permission desk that
+  `answer_permission` resolves.
+- [x] **M3-T04 (L)** `09c7022` — Commands from `03-architecture.md` §7:
+  projects, engines, `start_turn` (direct only; `mode: "plan"` is refused
+  until M4), `answer_permission`, `cancel_turn`, checkpoints,
+  `restore_checkpoint`, `diff_summary`, `list_events`, `list_audit`,
+  `journal_size`, `unprotected_files`, settings. Errors cross as `AppError`
+  (code, message, next action). Tested over the real IPC path with Tauri's
+  mock runtime, which needs no window and no display; that test is what found
+  Undo and "protect this now" needing an engine started, both since fixed
+  (`CHANGELOG-plan.md`).
+- [x] **M3-T09 (S)** `09c7022` — Kill children on exit: `RunEvent::Exit`
+  shuts every engine down. Done here because M3-T03 is where the runners
+  became reachable from the exit handler.
+- [x] **M3-T05 (M)** `ae0c526` — Frontend `ipc.ts` (one typed function per
+  command, the only place that calls `invoke`), `events.ts` (the
+  `core://event` feed, with the gap re-fetch), `store.ts` (the window's state,
+  read through `useSyncExternalStore`; no state library, because the only
+  state the frontend has is a copy of what the core just said). The gap is
+  detected globally and repaired per session — `seq` is one counter shared by
+  every Project, so a skip may be in a conversation that is not on screen; see
+  `CHANGELOG-plan.md`.
 - [ ] **M3-T06 (L)** Screens: Home, Project (three panes), Settings (mode +
   engines only). Raw strings acceptable but must go through `t()` from the start.
 - [ ] **M3-T07 (M)** `Transcript`, `ToolCallRow`, `PermissionDialog` (queue), `Checkpoints` with Undo/Redo.
 - [ ] **M3-T08 (S)** `Diagnostics` panel with log tail (tail the `tracing` file).
-- [ ] **M3-T09 (S)** Kill children on exit (`kill_on_drop` plus explicit
-  shutdown in Tauri's `RunEvent::Exit`).
 
 **M3 exit recorded:** ______
 

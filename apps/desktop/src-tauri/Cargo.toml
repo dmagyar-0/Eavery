@@ -1,0 +1,48 @@
+[package]
+name = "eavery-desktop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+description = "Eavery's desktop shell: a Tauri window over eavery-core."
+
+[lib]
+# The `_lib` suffix keeps the library name distinct from the binary's, which
+# Windows needs (rust-lang/cargo#8519).
+name = "eavery_desktop_lib"
+# A plain library. The Tauri template also asks for `staticlib` and `cdylib`,
+# which exist for iOS and Android — neither of which v1 is
+# (`01-implementation-plan.md` §2). On Windows the `cdylib` is a DLL that sits
+# beside the test executables in `target\debug\deps`, and the loader resolves
+# it by name before the test binary's own statically linked copy: the DLL is
+# built without the `tauri/test` feature the tests turn on, so its exports do
+# not match and the test exits with STATUS_ENTRYPOINT_NOT_FOUND before running
+# anything. Mobile work brings both back, with the test layout that needs.
+crate-type = ["lib"]
+
+[build-dependencies]
+tauri-build.workspace = true
+
+[dependencies]
+eavery-acp.workspace = true
+eavery-core.workspace = true
+eavery-engines.workspace = true
+chrono.workspace = true
+directories.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tauri.workspace = true
+tauri-plugin-opener.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+# `test` gives the mock runtime, so the commands can be invoked over the real
+# IPC path with no window and no display.
+tauri = { workspace = true, features = ["test"] }
+tempfile.workspace = true
+uuid.workspace = true
