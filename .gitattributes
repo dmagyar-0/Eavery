@@ -1,0 +1,14 @@
+# Line endings are LF everywhere, in the repository and in the working tree.
+#
+# Without this, Git for Windows checks text files out as CRLF, and
+# `apps/desktop/src/types.ts` — which `cargo test -p eavery-core` generates
+# with LF and then compares byte for byte against what is committed — is
+# "stale" on Windows and nowhere else. Normalising the whole tree is the fix
+# for the cause rather than for that one file.
+* text=auto eol=lf
+
+# Left exactly as they are.
+*.png binary
+*.ico binary
+*.icns binary
+*.svg binary
