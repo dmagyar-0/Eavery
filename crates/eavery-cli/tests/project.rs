@@ -33,20 +33,37 @@ fn edit_script() -> Value {
 
 struct Workspace {
     dir: tempfile::TempDir,
+    /// The Project folder as the store holds it, and so as every command
+    /// prints it back.
+    project: PathBuf,
 }
 
 impl Workspace {
     fn new() -> Self {
-        let workspace = Self {
-            dir: tempfile::tempdir().expect("a temp folder"),
-        };
-        std::fs::create_dir_all(workspace.project()).unwrap();
-        std::fs::create_dir_all(workspace.data()).unwrap();
-        std::fs::write(workspace.project().join("report.txt"), "FY25\n").unwrap();
-        workspace
+        let dir = tempfile::tempdir().expect("a temp folder");
+        let project = dir.path().join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::create_dir_all(dir.path().join("data")).unwrap();
+        std::fs::write(project.join("report.txt"), "FY25\n").unwrap();
+
+        Self {
+            project: eavery_core::paths::canonicalize(&project).expect("resolve the folder"),
+            dir,
+        }
     }
 
-    fn project(&self) -> PathBuf {
+    /// The canonical form, which is what the CLI stores and prints.
+    fn project(&self) -> &Path {
+        &self.project
+    }
+
+    /// The folder as it was typed, before anything resolved it.
+    ///
+    /// On Windows these two differ: a temp directory arrives as a short 8.3
+    /// path (`C:\Users\RUNNER~1\...`) and resolves to the long one. Passing
+    /// this form to the commands is the point — someone typing a path types
+    /// whatever their shell gave them, and the Project has to be found anyway.
+    fn project_as_typed(&self) -> PathBuf {
         self.dir.path().join("project")
     }
 
@@ -107,7 +124,8 @@ fn short_id(line: &str) -> &str {
 fn opening_a_folder_protects_it_and_remembers_it() {
     let workspace = Workspace::new();
 
-    let printed = succeeds(&workspace.cli(&["project", "open", &path(&workspace.project())]));
+    let printed =
+        succeeds(&workspace.cli(&["project", "open", &path(&workspace.project_as_typed())]));
     assert!(printed.contains("folder   1 files"), "{printed}");
     assert!(printed.contains("project  "), "{printed}");
     assert!(printed.contains("Project opened"), "{printed}");
@@ -118,10 +136,11 @@ fn opening_a_folder_protects_it_and_remembers_it() {
 
     let listed = succeeds(&workspace.cli(&["project", "list"]));
     assert!(listed.contains("project"), "{listed}");
-    assert!(listed.contains(&path(&workspace.project())), "{listed}");
+    assert!(listed.contains(&path(workspace.project())), "{listed}");
 
     // Opening again is not a second Project.
-    let again = succeeds(&workspace.cli(&["project", "open", &path(&workspace.project())]));
+    let again =
+        succeeds(&workspace.cli(&["project", "open", &path(&workspace.project_as_typed())]));
     assert!(again.contains("already open as"), "{again}");
     assert_eq!(
         succeeds(&workspace.cli(&["project", "list"]))
@@ -138,12 +157,12 @@ fn opening_a_folder_protects_it_and_remembers_it() {
 fn a_turn_changes_the_folder_and_undo_puts_it_back() {
     let workspace = Workspace::new();
     let script = workspace.script(edit_script());
-    succeeds(&workspace.cli(&["project", "open", &path(&workspace.project())]));
+    succeeds(&workspace.cli(&["project", "open", &path(&workspace.project_as_typed())]));
 
     let printed = succeeds(&workspace.cli(&[
         "run",
         "--project",
-        &path(&workspace.project()),
+        &path(&workspace.project_as_typed()),
         "--engine",
         "fake",
         "--script",
@@ -173,12 +192,14 @@ fn a_turn_changes_the_folder_and_undo_puts_it_back() {
     assert_eq!(workspace.read("summary.txt"), "one line\n");
 
     // Both ends of the turn are in the history.
-    let history = succeeds(&workspace.cli(&["history", "--project", &path(&workspace.project())]));
+    let history =
+        succeeds(&workspace.cli(&["history", "--project", &path(&workspace.project_as_typed())]));
     assert!(history.contains("after"), "{history}");
     assert!(history.contains("After: make it FY26"), "{history}");
 
     // And Undo puts the folder back, byte for byte.
-    let undone = succeeds(&workspace.cli(&["undo", "--project", &path(&workspace.project())]));
+    let undone =
+        succeeds(&workspace.cli(&["undo", "--project", &path(&workspace.project_as_typed())]));
     assert!(undone.contains("back to  "), "{undone}");
     assert_eq!(
         workspace.read("report.txt"),
@@ -195,17 +216,18 @@ fn a_turn_changes_the_folder_and_undo_puts_it_back() {
 fn diff_says_what_changed_between_two_points() {
     let workspace = Workspace::new();
     let script = workspace.script(edit_script());
-    succeeds(&workspace.cli(&["project", "open", &path(&workspace.project())]));
+    succeeds(&workspace.cli(&["project", "open", &path(&workspace.project_as_typed())]));
     succeeds(&workspace.cli(&[
         "run",
         "--project",
-        &path(&workspace.project()),
+        &path(&workspace.project_as_typed()),
         "--script",
         &path(&script),
         "make it FY26",
     ]));
 
-    let history = succeeds(&workspace.cli(&["history", "--project", &path(&workspace.project())]));
+    let history =
+        succeeds(&workspace.cli(&["history", "--project", &path(&workspace.project_as_typed())]));
     let lines: Vec<&str> = history.lines().collect();
     let after = short_id(lines[0]);
     let before = short_id(lines[1]);
@@ -213,7 +235,7 @@ fn diff_says_what_changed_between_two_points() {
     let printed = succeeds(&workspace.cli(&[
         "diff",
         "--project",
-        &path(&workspace.project()),
+        &path(&workspace.project_as_typed()),
         before,
         after,
     ]));
@@ -224,13 +246,21 @@ fn diff_says_what_changed_between_two_points() {
     assert!(printed.contains("+FY26"), "{printed}");
 
     // With nothing to compare against, the question is "and since then?".
-    let since =
-        succeeds(&workspace.cli(&["diff", "--project", &path(&workspace.project()), after]));
+    let since = succeeds(&workspace.cli(&[
+        "diff",
+        "--project",
+        &path(&workspace.project_as_typed()),
+        after,
+    ]));
     assert!(since.contains("nothing changed"), "{since}");
 
     std::fs::write(workspace.project().join("mine.txt"), "my own note\n").unwrap();
-    let since =
-        succeeds(&workspace.cli(&["diff", "--project", &path(&workspace.project()), after]));
+    let since = succeeds(&workspace.cli(&[
+        "diff",
+        "--project",
+        &path(&workspace.project_as_typed()),
+        after,
+    ]));
     assert!(
         since.contains("added    mine.txt"),
         "an edit Eavery never saw still shows up:\n{since}"
@@ -242,9 +272,9 @@ fn diff_says_what_changed_between_two_points() {
 #[test]
 fn undo_before_any_turn_says_there_is_nothing_to_undo() {
     let workspace = Workspace::new();
-    succeeds(&workspace.cli(&["project", "open", &path(&workspace.project())]));
+    succeeds(&workspace.cli(&["project", "open", &path(&workspace.project_as_typed())]));
 
-    let output = workspace.cli(&["undo", "--project", &path(&workspace.project())]);
+    let output = workspace.cli(&["undo", "--project", &path(&workspace.project_as_typed())]);
     assert!(!output.status.success());
     let complaint = String::from_utf8_lossy(&output.stderr);
     assert!(complaint.contains("nothing to undo"), "{complaint}");
@@ -253,7 +283,7 @@ fn undo_before_any_turn_says_there_is_nothing_to_undo() {
 #[test]
 fn a_project_that_is_not_open_is_not_guessed_at() {
     let workspace = Workspace::new();
-    succeeds(&workspace.cli(&["project", "open", &path(&workspace.project())]));
+    succeeds(&workspace.cli(&["project", "open", &path(&workspace.project_as_typed())]));
 
     let output = workspace.cli(&["history", "--project", "no-such-project"]);
     assert!(!output.status.success());
@@ -261,7 +291,7 @@ fn a_project_that_is_not_open_is_not_guessed_at() {
     assert!(complaint.contains("no project matches"), "{complaint}");
     // And it says which ones there are, so the next command can be right.
     assert!(
-        complaint.contains(&path(&workspace.project())),
+        complaint.contains(&path(workspace.project())),
         "{complaint}"
     );
 }
@@ -283,12 +313,12 @@ fn an_unattended_run_refuses_what_it_cannot_ask_about() {
             {"stop": "end_turn"}
         ]}]
     }));
-    succeeds(&workspace.cli(&["project", "open", &path(&workspace.project())]));
+    succeeds(&workspace.cli(&["project", "open", &path(&workspace.project_as_typed())]));
 
     let printed = succeeds(&workspace.cli(&[
         "run",
         "--project",
-        &path(&workspace.project()),
+        &path(&workspace.project_as_typed()),
         "--script",
         &path(&script),
         "run the backup",
