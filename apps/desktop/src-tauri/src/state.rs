@@ -183,7 +183,7 @@ impl AppCore {
                 engine,
                 spec.id,
                 // Connectors arrive with M6-T08.
-                &[],
+                &eavery_core::policy::ConnectorRegistry::default(),
                 self.callbacks(),
             )
             .await?,

@@ -333,6 +333,43 @@ async fn the_fs_guard_can_close_writes() {
     engine.shutdown().await;
 }
 
+/// M4-T03, through the `Engine` trait rather than the guard: during planning
+/// a write through the client is refused with the `06 §2.2` message, the
+/// agent goes on, and a read from outside the Project is still served (D15).
+/// The script asserts the refusal from its side too — a write that went
+/// through exits the fake agent with code 3.
+#[tokio::test]
+async fn writes_are_refused_during_planning_and_reads_are_not() {
+    let dir = tempfile::tempdir().unwrap();
+    let elsewhere = tempfile::tempdir().unwrap();
+    std::fs::write(elsewhere.path().join("playbook.md"), "# Month end\n").unwrap();
+    let script = write_script(
+        dir.path(),
+        json!({"turns": [{"actions": [
+            {"fs_write": {"path": "{{cwd}}/notes.txt", "text": "FY26", "expect_refused": true}},
+            {"fs_read": {"path": elsewhere.path().join("playbook.md")}},
+            {"text": "Here is my plan."},
+            {"stop": "end_turn"}
+        ]}]}),
+    );
+    let engine = engine_for(&script, dir.path());
+    engine.start().await.unwrap();
+    let session = engine.open_session(dir.path(), &[], None).await.unwrap();
+
+    let planning: &dyn Engine = &engine;
+    planning.set_writes_allowed(false).await;
+    let (handler, _) = always(Decision::RejectOnce);
+    let (events, stop) = run(&engine, &session.session_id, "plan it", handler).await;
+    assert_eq!(stop.unwrap(), StopReason::EndTurn);
+    assert!(!dir.path().join("notes.txt").exists());
+    assert!(matches!(&events[0], RawAgentEvent::Text(t) if t == "Here is my plan."));
+    assert!(!engine.fs_guard().writes_allowed());
+
+    planning.set_writes_allowed(true).await;
+    assert!(engine.fs_guard().writes_allowed());
+    engine.shutdown().await;
+}
+
 /// Cancel is called from another task while `prompt` is blocked. This is the
 /// reason every `Engine` method takes `&self`.
 #[tokio::test]

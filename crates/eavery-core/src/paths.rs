@@ -45,9 +45,58 @@ pub fn nearest_existing(path: impl AsRef<Path>) -> PathBuf {
 /// Both sides are canonicalised the same way, which is the whole point: a
 /// comparison between a verbatim path and an ordinary one is always false, and
 /// on the `06` §3.1 decision table that turns every ordinary edit into a
-/// `Destructive` one.
+/// `Destructive` one. A verbatim prefix on either side is stripped first, so
+/// a path that does not exist yet — which canonicalisation cannot touch — is
+/// compared on equal terms too. Two Windows-shaped paths are compared as
+/// Windows compares them, whichever OS this runs on: either separator, and
+/// without regard to case.
 pub fn is_inside(path: impl AsRef<Path>, root: impl AsRef<Path>) -> bool {
-    nearest_existing(path).starts_with(canonical_or_self(root))
+    let path = nearest_existing(strip_verbatim(path.as_ref()));
+    let root = canonical_or_self(strip_verbatim(root.as_ref()));
+    if looks_like_windows(&path) && looks_like_windows(&root) {
+        return windows_starts_with(&path, &root);
+    }
+    path.starts_with(root)
+}
+
+/// `\\?\C:\x` as `C:\x`, and `\\?\UNC\server\share` as `\\server\share`.
+/// Anything else unchanged.
+pub fn strip_verbatim(path: &Path) -> PathBuf {
+    let text = path.to_string_lossy();
+    if let Some(unc) = text.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{unc}"));
+    }
+    if let Some(plain) = text.strip_prefix(r"\\?\") {
+        return PathBuf::from(plain);
+    }
+    path.to_path_buf()
+}
+
+/// A drive letter or a UNC prefix: a path Windows would understand, whatever
+/// this OS makes of it.
+fn looks_like_windows(path: &Path) -> bool {
+    let text = path.to_string_lossy();
+    let bytes = text.as_bytes();
+    let drive = bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && (bytes[2] == b'\\' || bytes[2] == b'/');
+    drive || text.starts_with(r"\\")
+}
+
+/// A component-wise prefix test that treats `\` and `/` alike and ignores
+/// case, which is how the Windows filesystem itself compares names.
+fn windows_starts_with(path: &Path, root: &Path) -> bool {
+    let parts = |path: &Path| -> Vec<String> {
+        path.to_string_lossy()
+            .split(['\\', '/'])
+            .filter(|part| !part.is_empty())
+            .map(str::to_lowercase)
+            .collect()
+    };
+    let path = parts(path);
+    let root = parts(root);
+    path.len() >= root.len() && path[..root.len()] == root[..]
 }
 
 #[cfg(test)]
@@ -122,5 +171,44 @@ mod tests {
             std::fs::read_to_string(dir.path().join("notes.txt")).unwrap(),
             "FY26"
         );
+    }
+
+    /// The Windows hazard `06` §3.1 warns about, on every OS: a verbatim root
+    /// and an ordinary path — or the reverse — are the same place.
+    #[test]
+    fn a_verbatim_root_and_an_ordinary_path_compare_as_the_same_place() {
+        let root = r"\\?\C:\Users\me\Project";
+        assert!(is_inside(r"C:\Users\me\Project\report.docx", root));
+        assert!(is_inside(
+            r"\\?\C:\Users\me\Project\sub\new.docx",
+            r"C:\Users\me\Project"
+        ));
+        assert!(is_inside(r"c:/users/me/project/report.docx", root));
+        assert!(!is_inside(r"C:\Users\me\Other\report.docx", root));
+        assert!(
+            !is_inside(r"C:\Users\me\Projects\report.docx", root),
+            "a longer name is not a prefix"
+        );
+        assert!(
+            !is_inside(r"D:\Users\me\Project\report.docx", root),
+            "another drive"
+        );
+    }
+
+    #[test]
+    fn a_verbatim_unc_path_is_stripped_to_its_share() {
+        assert_eq!(
+            strip_verbatim(Path::new(r"\\?\UNC\server\share\file.txt")),
+            PathBuf::from(r"\\server\share\file.txt")
+        );
+        assert_eq!(
+            strip_verbatim(Path::new(r"\\?\C:\x")),
+            PathBuf::from(r"C:\x")
+        );
+        assert_eq!(strip_verbatim(Path::new("/tmp/x")), PathBuf::from("/tmp/x"));
+        assert!(is_inside(
+            r"\\?\UNC\server\share\report.docx",
+            r"\\server\share"
+        ));
     }
 }

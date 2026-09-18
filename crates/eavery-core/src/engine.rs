@@ -318,6 +318,13 @@ pub trait Engine: Send + Sync {
     /// outstanding prompt then returns [`StopReason::Cancelled`].
     async fn cancel(&self, session: &str) -> Result<(), EngineError>;
 
+    /// Whether `fs/write_text_file` is served. The plan gate closes writes for
+    /// the plan phase and opens them again for execution
+    /// (`docs/plan/06-plan-gate-permissions.md` §2.2). An engine that does
+    /// not write through the client has nothing to close, so the default does
+    /// nothing.
+    async fn set_writes_allowed(&self, _allowed: bool) {}
+
     /// The last lines of the engine's stderr, for crash reports.
     async fn stderr_tail(&self) -> Vec<String>;
 

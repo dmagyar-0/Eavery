@@ -125,7 +125,8 @@ pub async fn run(data_dir: &Path, args: &RunArgs) -> Result<ExitCode> {
         journal,
         engine,
         &args.engine,
-        &[],
+        // Connectors arrive with M6-T08.
+        &eavery_core::policy::ConnectorRegistry::default(),
         callbacks(args.answer.clone()),
     )
     .await?;

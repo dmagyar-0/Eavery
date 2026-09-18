@@ -7,7 +7,7 @@
 // destructive request starts with focus on Reject.
 
 import { useEffect, useRef } from "react";
-import type { Decision, PermissionView } from "../types";
+import type { Decision, PermissionView, UiMode } from "../types";
 import { answer, useStore } from "../store";
 import { useT, type T } from "../vocab/useT";
 
@@ -26,13 +26,18 @@ export function permissionTitle(t: T, request: PermissionView): string {
 }
 
 /**
- * Which decisions to offer. "Always" is only offered where it can be safe:
- * never for something that leaves the computer or that Undo cannot reach.
- * The full decision table arrives with M4-T02.
+ * Which decisions to offer. "Always" is offered where the decision table
+ * (`docs/plan/06-plan-gate-permissions.md` §3.2) says it may be: the core
+ * sends the row's answer in `request.always`, and this applies the mode. It
+ * is never offered for something that leaves the computer or that Undo
+ * cannot reach, and for running a command only in Developer mode. The core
+ * narrows an "always" it did not offer, so this is the polite half of the
+ * rule, not the only half.
  */
-function offered(request: PermissionView): Decision[] {
+export function offered(request: PermissionView, mode: UiMode): Decision[] {
   const kinds = new Set(request.options.map((option) => option.kind));
-  const always = request.risk !== "outbound" && request.risk !== "destructive";
+  const always =
+    request.always === "yes" || (request.always === "developer_only" && mode === "developer");
   const decisions: Decision[] = [];
   if (kinds.has("allow_once")) decisions.push("allow_once");
   if (always && kinds.has("allow_always")) decisions.push("allow_always");
@@ -42,7 +47,7 @@ function offered(request: PermissionView): Decision[] {
 }
 
 export function PermissionDialog() {
-  const { asking } = useStore();
+  const { asking, settings } = useStore();
   const t = useT();
   const request = asking[0];
   const dialog = useRef<HTMLDivElement>(null);
@@ -83,7 +88,7 @@ export function PermissionDialog() {
 
   if (!request) return null;
 
-  const decisions = offered(request);
+  const decisions = offered(request, settings.mode);
   const label = (decision: Decision) =>
     decision === "allow_once"
       ? t("allowOnce")
@@ -103,6 +108,8 @@ export function PermissionDialog() {
         <p className="dialog-kicker">{t("permissionTitle")}</p>
         <h2 id="permission-title">{permissionTitle(t, request)}</h2>
         {request.explanation ? <p className="dialog-body">{request.explanation}</p> : null}
+        {request.in_plan === true ? <p className="dialog-body">{t("permInPlan")}</p> : null}
+        {request.in_plan === false ? <p className="dialog-body">{t("permNotInPlan")}</p> : null}
         {request.locations.length > 0 ? (
           <div className="dialog-body">
             <span className="muted">{t("permissionWhere")}</span>

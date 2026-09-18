@@ -45,7 +45,9 @@ Rules:
 - `request_permission.expect` makes the fake agent exit with code 3 if the
   client answers with a different `kind`, which fails the test loudly.
 - `fs_write` uses the client's `fs/write_text_file`; `write_direct` writes the
-  file itself (to simulate engines that bypass the client).
+  file itself (to simulate engines that bypass the client). `fs_write` and
+  `fs_read` take `expect_refused: true` to exit with code 3 if the client did
+  *not* refuse, which is how a planning-phase script asserts the gate.
 - `sleep_ms` and `exit` (crash simulation) exist for lifecycle tests.
 - Any `session/cancel` makes the current turn stop with `cancelled`.
 

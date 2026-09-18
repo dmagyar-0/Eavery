@@ -302,8 +302,16 @@ impl Agent {
                 });
                 // A refused write is a legitimate outcome (the plan gate says
                 // no), so it is reported and the turn goes on.
-                if let Err(err) = self.call("fs/write_text_file", params)? {
+                let outcome = self.call("fs/write_text_file", params)?;
+                if let Err(err) = &outcome {
                     eprintln!("eavery-fake-agent: write refused: {}", err.message);
+                }
+                if file.expect_refused && outcome.is_ok() {
+                    eprintln!(
+                        "eavery-fake-agent: expected the client to refuse writing {}, but it did not",
+                        file.path
+                    );
+                    self.expectation_failed = true;
                 }
             }
             Action::FsRead(read) => {

@@ -113,6 +113,9 @@ pub struct PermissionAction {
 pub struct FileAction {
     pub path: String,
     pub text: String,
+    /// If set, the write is expected to be refused; a success exits with
+    /// code 3. What a planning-phase script asserts.
+    pub expect_refused: bool,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
