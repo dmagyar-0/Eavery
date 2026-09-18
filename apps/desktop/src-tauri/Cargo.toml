@@ -13,12 +13,11 @@ description = "Eavery's desktop shell: a Tauri window over eavery-core."
 name = "eavery_desktop_lib"
 # A plain library. The Tauri template also asks for `staticlib` and `cdylib`,
 # which exist for iOS and Android — neither of which v1 is
-# (`01-implementation-plan.md` §2). On Windows the `cdylib` is a DLL that sits
-# beside the test executables in `target\debug\deps`, and the loader resolves
-# it by name before the test binary's own statically linked copy: the DLL is
-# built without the `tauri/test` feature the tests turn on, so its exports do
-# not match and the test exits with STATUS_ENTRYPOINT_NOT_FOUND before running
-# anything. Mobile work brings both back, with the test layout that needs.
+# (`01-implementation-plan.md` §2), and which on Windows put a DLL beside the
+# test executables for no reason. (That DLL was once blamed for the IPC test
+# binary exiting STATUS_ENTRYPOINT_NOT_FOUND on Windows; the real cause was
+# the missing application manifest, see `build.rs`.) Mobile work brings both
+# back, with the test layout that needs.
 crate-type = ["lib"]
 
 [build-dependencies]
