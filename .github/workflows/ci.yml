@@ -54,22 +54,33 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace --no-run
       # `tauri` links Windows' WebView2 loader even where the tests use its
-      # mock runtime, and `webview2-com-sys` puts `WebView2Loader.dll` next to
-      # the app binary in `target\debug`. A test executable runs from
-      # `target\debug\deps`, which is the directory Windows searches first, so
-      # without a copy there the loader binds to the system-wide DLL, whose
-      # exports do not match, and the test exits 0xc0000139 before running a
-      # line. The listing is deliberate: if the DLL ever moves, the log says
-      # where it went.
+      # mock runtime, and `webview2-com-sys` unpacks `WebView2Loader.dll` for
+      # every architecture under its build output (`out\arm64`, `out\x64`,
+      # `out\x86`). A test executable runs from `target\debug\deps`, which is
+      # the directory Windows searches first, so without a copy there the
+      # loader binds to the system-wide DLL, whose exports do not match, and
+      # the test exits 0xc0000139 before running a line. The copy has to be
+      # the runner's own architecture: the arm64 DLL beside an x64 binary
+      # fails the same way. The listing is deliberate: if the DLL ever moves,
+      # the log says where it went.
       - name: Put the WebView2 loader beside the test binaries
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
+          $arch = switch ($env:PROCESSOR_ARCHITECTURE) {
+            "ARM64" { "arm64" }
+            "x86" { "x86" }
+            default { "x64" }
+          }
           $found = Get-ChildItem -Path target -Recurse -Filter WebView2Loader.dll -ErrorAction SilentlyContinue
           $found | ForEach-Object { Write-Host "found: $($_.FullName)" }
-          if ($found) {
+          $right = $found | Where-Object { $_.Directory.Name -eq $arch } | Select-Object -First 1
+          if ($right) {
+            Copy-Item -Path $right.FullName -Destination target\debug\deps\ -Force
+            Write-Host "copied the $arch loader to target\debug\deps"
+          } elseif ($found) {
             Copy-Item -Path $found[0].FullName -Destination target\debug\deps\ -Force
-            Write-Host "copied to target\debug\deps"
+            Write-Host "no $arch loader found; copied $($found[0].FullName) to target\debug\deps"
           } else {
             Write-Host "no WebView2Loader.dll anywhere under target"
           }
