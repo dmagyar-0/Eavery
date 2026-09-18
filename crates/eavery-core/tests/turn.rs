@@ -17,6 +17,7 @@ use eavery_core::engine::{
 use eavery_core::event::{CoreEvent, DecidedBy, Decision, PermissionOption, PermissionView};
 use eavery_core::journal::{Journal, Watch};
 use eavery_core::model::{CheckpointKind, Project, RiskClass, TurnPhase};
+use eavery_core::policy::{AlwaysOffer, ConnectorRegistry};
 use eavery_core::store::{Store, StoredEvent};
 use eavery_core::turn::{ProjectRunner, TurnCallbacks, TurnError};
 use futures::FutureExt;
@@ -283,7 +284,7 @@ impl Fixture {
                 Arc::clone(&self.journal),
                 engine,
                 "test",
-                &[],
+                &ConnectorRegistry::default(),
                 self.seen.callbacks(answer),
             )
             .await
@@ -313,6 +314,10 @@ fn edit_of(path: &Path) -> PermissionView {
             },
         ],
         explanation: "edit".into(),
+        raw_input: None,
+        always: AlwaysOffer::Never,
+        in_plan: None,
+        connector: None,
     }
 }
 
@@ -606,6 +611,112 @@ async fn what_leaves_the_machine_is_listed_in_the_digest() {
         vec!["Send the report to example.com"]
     );
     assert!(outcome.digest.refused_actions.is_empty());
+}
+
+/// §3.3: "always" for a command, given in Developer mode, is remembered per
+/// Project. The same command asked again is answered by the policy without a
+/// dialog; a different command is still asked about.
+#[tokio::test]
+async fn always_for_a_command_is_remembered_for_the_project() {
+    let fixture = Fixture::new();
+    fixture
+        .store
+        .set_setting(
+            eavery_core::model::Settings::KEY,
+            &eavery_core::model::Settings {
+                mode: eavery_core::model::UiMode::Developer,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let engine = TestEngine::new(vec![
+        vec![Act::Ask(command("Run the backup script"))],
+        vec![
+            Act::Ask(command("Run  the BACKUP script")),
+            Act::Ask(command("Run the other script")),
+        ],
+    ]);
+    let runner = fixture
+        .runner(Arc::clone(&engine), Decision::AllowAlways)
+        .await;
+
+    runner.run_turn("Back it up").await.unwrap();
+    assert_eq!(fixture.seen.asked().len(), 1);
+    assert_eq!(engine.answers()[0].1, Decision::AllowAlways);
+
+    runner.run_turn("Back it up again").await.unwrap();
+    let asked = fixture.seen.asked();
+    assert_eq!(
+        asked.len(),
+        2,
+        "the remembered command is not asked about again"
+    );
+    assert_eq!(asked[1].title, "Run the other script");
+    assert_eq!(asked[1].always, AlwaysOffer::DeveloperOnly);
+    assert_eq!(
+        engine.answers()[1].1,
+        Decision::AllowOnce,
+        "the engine is told once, by the policy"
+    );
+
+    let resolved: Vec<(Decision, DecidedBy)> = fixture
+        .seen
+        .events()
+        .iter()
+        .filter_map(|stored| match &stored.event {
+            CoreEvent::PermissionResolved { decision, by, .. } => Some((*decision, *by)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        resolved,
+        vec![
+            (Decision::AllowAlways, DecidedBy::User),
+            (Decision::AllowOnce, DecidedBy::Policy),
+            (Decision::AllowAlways, DecidedBy::User),
+        ]
+    );
+}
+
+/// C11: in Everyday mode there is no "always" for a command, and an answer
+/// that says so anyway is narrowed to "once" and not remembered. The same
+/// for anything outbound, in either mode.
+#[tokio::test]
+async fn an_always_the_table_forbids_is_narrowed_and_forgotten() {
+    let fixture = Fixture::new();
+    let mut fetch = command("Send the report to example.com");
+    fetch.kind = "fetch".into();
+    let engine = TestEngine::new(vec![
+        vec![
+            Act::Ask(command("Run the backup script")),
+            Act::Ask(fetch.clone()),
+        ],
+        vec![Act::Ask(command("Run the backup script")), Act::Ask(fetch)],
+    ]);
+    let runner = fixture
+        .runner(Arc::clone(&engine), Decision::AllowAlways)
+        .await;
+
+    runner.run_turn("Do it").await.unwrap();
+    runner.run_turn("Do it again").await.unwrap();
+
+    assert_eq!(fixture.seen.asked().len(), 4, "nothing was remembered");
+    for (title, decision) in engine.answers() {
+        assert_eq!(decision, Decision::AllowOnce, "{title}");
+    }
+    let remembered: Option<Vec<String>> = fixture
+        .store
+        .setting(&eavery_core::policy::always_key(fixture.project.id))
+        .unwrap();
+    assert_eq!(remembered, None);
+    let asked = fixture.seen.asked();
+    assert_eq!(asked[0].always, AlwaysOffer::DeveloperOnly);
+    assert_eq!(asked[1].always, AlwaysOffer::Never);
+    assert_eq!(
+        asked[1].in_plan,
+        Some(false),
+        "direct mode has no plan to be in"
+    );
 }
 
 // ---- cancel, crash, and the guards ----------------------------------------

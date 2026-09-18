@@ -248,10 +248,32 @@ Pass/fail lines are in `01-implementation-plan.md` §4. Code lives in
 
 ## M4 — Plan gate and policy
 
-- [ ] **M4-T01 (S)** Prompt templates and the tiny renderer (`06-plan-gate-permissions.md` §4). Unit tests for `{{#if}}`.
-- [ ] **M4-T02 (M)** `policy::classify` and the decision table; `ConnectorRegistry` with the `outbound` flag; `is_inside` with Windows verbatim-path normalisation. Unit tests for every row plus a `\\?\C:\` root case.
-- [ ] **M4-T03 (M)** `PlanGateHandler` with `plan_exit_signatures` refusal and `fs/write_text_file` refusal during planning; `fs/read_text_file` served from anywhere (D15).
-- [ ] **M4-T04 (M)** Plan extraction parser with fallback; tests for valid JSON, invalid JSON, markdown list fallback.
+- [x] **M4-T01 (S)** `b2113db` — Prompt templates and the tiny renderer
+  (`06-plan-gate-permissions.md` §4): `eavery-core::prompts`, with the two
+  templates as Markdown beside it, `render` for `{{key}}` and `{{#if}}`, and
+  `plan_prompt` / `execute_prompt` / `execute_prompt_for` (direct mode, §5).
+  Unit tests for `{{#if}}`, broken tags, and both prompts.
+- [x] **M4-T02 (M)** `b2113db` — `eavery-core::policy`: `classify` over a
+  borrowed `CallFacts`, the §3.2 decision table as `decide` (the "always"
+  column travels on `PermissionView` as `always`, and the core narrows an
+  answer the table forbids), `ConnectorRegistry` with the `outbound` flag
+  and tool names, the §3.3 signature with its per-Project memory in the
+  settings table, and `is_inside` with the verbatim handling in
+  `paths::is_inside`. Unit tests for every row plus the `\\?\C:\` root
+  case, run on all three platforms. `ProjectRunner::open` takes the
+  registry; see `CHANGELOG-plan.md`.
+- [x] **M4-T03 (M)** `b2113db` — The gate is `policy::plan_gate` (with
+  `is_plan_exit` and `bypassed_plan_gate`), a pure function tested for every
+  row of §2.2 including the exit signatures matched on title or `rawInput`;
+  `fs/write_text_file` is refused with the §2.2 message while
+  `Engine::set_writes_allowed(false)` holds, and `fs/read_text_file` is
+  served from anywhere (D15), both tested through the fake agent, whose
+  `fs_write` now takes `expect_refused`. **Left for M4-T05:** applying the
+  gate from the turn engine, which has no plan phase yet.
+- [x] **M4-T04 (M)** `b2113db` — `eavery-core::plan::extract`: the last
+  `eavery-plan` block as JSON, or the reply with its list items as steps.
+  Tests for valid JSON, invalid JSON, the markdown-list fallback, the
+  last-block rule, other fenced blocks, and an empty reply.
 - [ ] **M4-T05 (L)** Two-phase turn in `eavery-core::turn`: Planning → AwaitingApproval → Executing; mode switching via `set_mode` using `plan_mode_hint` / `asking_mode_hint`; cancel in each phase; digest with outbound and refused lists (outbound list always present, "Nothing" when empty).
 - [ ] **M4-T06 (M)** Audit log rows for every decision; `list_audit` command (Developer mode view).
 - [ ] **M4-T07 (M)** UI: `PlanCard` including the "Your documents are sent to {vendor}" line, `approve_plan`/`reject_plan` commands, "always" storage.

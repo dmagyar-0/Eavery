@@ -12,5 +12,8 @@ pub mod event;
 pub mod journal;
 pub mod model;
 pub mod paths;
+pub mod plan;
+pub mod policy;
+pub mod prompts;
 pub mod store;
 pub mod turn;

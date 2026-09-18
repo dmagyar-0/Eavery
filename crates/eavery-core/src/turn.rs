@@ -45,17 +45,18 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::engine::{
-    Engine, EngineError, McpServerSpec, PermissionHandler, RawAgentEvent, RawToolCall,
-    RawToolCallUpdate, StopReason,
+    Engine, EngineError, PermissionHandler, RawAgentEvent, RawToolCall, RawToolCallUpdate,
+    StopReason,
 };
 use crate::event::{
     CoreEvent, DecidedBy, Decision, Digest, ErrorCode, PermissionView, PlanEntryView, ToolCallView,
 };
 use crate::journal::{ChangeSet, Journal, JournalError};
 use crate::model::{
-    Checkpoint, CheckpointId, CheckpointKind, EngineStatus, ProjectId, Session, SessionId, Turn,
-    TurnId, TurnPhase,
+    Checkpoint, CheckpointId, CheckpointKind, EngineStatus, ProjectId, RiskClass, Session,
+    SessionId, Settings, Turn, TurnId, TurnPhase, UiMode,
 };
+use crate::policy::{self, CallFacts, ConnectorRegistry, Verdict};
 use crate::store::{NewAudit, Store, StoreError, StoredEvent};
 
 /// How much of the request goes into a checkpoint label. Long enough to
@@ -215,6 +216,7 @@ pub struct ProjectRunner {
     /// The engine's own session id, from `session/new`.
     engine_session: String,
     ask: PermissionHandler,
+    connectors: Arc<ConnectorRegistry>,
     session: Session,
     busy: Arc<Mutex<Option<Busy>>>,
 }
@@ -239,7 +241,7 @@ impl ProjectRunner {
         journal: Arc<Journal>,
         engine: Arc<dyn Engine>,
         engine_id: &str,
-        connectors: &[McpServerSpec],
+        connectors: &ConnectorRegistry,
         callbacks: TurnCallbacks,
     ) -> Result<Self, TurnError> {
         let project_id = journal.project_id();
@@ -248,7 +250,7 @@ impl ProjectRunner {
         // session is M7-T05, and a half-resumed conversation is worse than a
         // fresh one.
         let opened = engine
-            .open_session(journal.root(), connectors, None)
+            .open_session(journal.root(), &connectors.specs(), None)
             .await?;
 
         let session = Session {
@@ -283,6 +285,7 @@ impl ProjectRunner {
             engine_id: engine_id.to_owned(),
             engine_session: opened.session_id,
             ask: callbacks.permission,
+            connectors: Arc::new(connectors.clone()),
             session,
             busy: Arc::new(Mutex::new(None)),
         })
@@ -602,6 +605,7 @@ impl ProjectRunner {
             recorder: Arc::clone(&self.recorder),
             ask: Arc::clone(&self.ask),
             root: self.journal.root().to_path_buf(),
+            connectors: Arc::clone(&self.connectors),
             log,
             turn_id,
         });
@@ -672,22 +676,34 @@ impl ProjectRunner {
     }
 
     fn tool_call_view(&self, call: RawToolCall) -> ToolCallView {
+        let kind = if call.kind.is_empty() {
+            "other".to_owned()
+        } else {
+            call.kind
+        };
+        // An engine that gave no title still has to appear as something in
+        // the transcript, and its own id is the only thing left.
+        let title = if call.title.is_empty() {
+            call.id.clone()
+        } else {
+            call.title
+        };
+        let risk = policy::classify(
+            &CallFacts {
+                kind: &kind,
+                title: &title,
+                locations: &call.locations,
+                raw_input: call.raw_input.as_ref(),
+            },
+            self.journal.root(),
+            &self.connectors,
+        );
         ToolCallView {
-            risk: classify(&call.kind, &call.locations, self.journal.root()),
+            risk,
             diff_summary: diff_summary(&call.diff_paths),
-            // An engine that gave no title still has to appear as something in
-            // the transcript, and its own id is the only thing left.
-            title: if call.title.is_empty() {
-                call.id.clone()
-            } else {
-                call.title
-            },
+            title,
             id: call.id,
-            kind: if call.kind.is_empty() {
-                "other".to_owned()
-            } else {
-                call.kind
-            },
+            kind,
             status: call.status,
             locations: call.locations,
         }
@@ -712,7 +728,11 @@ impl ProjectRunner {
         }
         // A call that now names files it did not name before is a different
         // risk than it was.
-        view.risk = classify(&view.kind, &view.locations, self.journal.root());
+        view.risk = policy::classify(
+            &CallFacts::from(&*view),
+            self.journal.root(),
+            &self.connectors,
+        );
     }
 }
 
@@ -825,36 +845,71 @@ struct Decider {
     recorder: Arc<Recorder>,
     ask: PermissionHandler,
     root: PathBuf,
+    connectors: Arc<ConnectorRegistry>,
     log: Arc<Mutex<TurnLog>>,
     turn_id: TurnId,
 }
 
 impl Decider {
-    /// The M2 rows of the decision table in
-    /// `docs/plan/06-plan-gate-permissions.md` §3.2: what the pre-turn
-    /// checkpoint makes reversible goes through silently, and everything else
-    /// is the user's call. A silent decision is still written down.
+    /// The decision table in `docs/plan/06-plan-gate-permissions.md` §3.2:
+    /// what the pre-turn checkpoint makes reversible goes through silently,
+    /// and everything else is the user's call — unless they already gave it
+    /// for this Project with "always". A silent decision is still written
+    /// down.
     async fn decide(&self, request: PermissionView) -> Decision {
         // The engine's layer could only guess at the risk: it has neither the
         // Project root nor the Connector registry. Reclassify before anyone,
         // including the user, is shown the request.
-        let risk = classify(&request.kind, &request.locations, &self.root);
-        let request = PermissionView { risk, ..request };
+        let facts = CallFacts::from(&request);
+        let connector = self
+            .connectors
+            .owning(&facts)
+            .map(|connector| connector.name().to_owned());
+        let risk = policy::classify(&facts, &self.root, &self.connectors);
+        // Direct mode has no plan for an outbound call to be listed in. The
+        // two-phase turn (M4-T05) hands the approved plan's list in here.
+        let verdict = policy::decide(risk, false);
+        let signature = policy::signature(&facts, connector.as_deref());
+        let request = PermissionView {
+            risk,
+            always: verdict.always(),
+            in_plan: verdict.in_plan(),
+            connector: connector.clone(),
+            ..request
+        };
 
         self.recorder.emit_or_log(CoreEvent::PermissionRequested {
             turn_id: self.turn_id,
             request: request.clone(),
         });
 
-        let (decision, by) = match settled_by_policy(risk) {
-            Some(decision) => (decision, DecidedBy::Policy),
-            None => ((self.ask)(request.clone()).await, DecidedBy::User),
+        let mode = self.ui_mode();
+        let (decision, by) = match verdict {
+            Verdict::Allow => (Decision::AllowOnce, DecidedBy::Policy),
+            Verdict::Ask(_) if self.allowed_before(&signature, risk, mode) => {
+                (Decision::AllowOnce, DecidedBy::Policy)
+            }
+            Verdict::Ask(_) => {
+                let answered = (self.ask)(request.clone()).await;
+                let narrowed = policy::narrow(answered, risk, mode);
+                if narrowed != answered {
+                    tracing::warn!(
+                        title = %request.title,
+                        ?risk,
+                        "\"always\" is not offered for this; treating it as \"once\""
+                    );
+                }
+                if narrowed == Decision::AllowAlways {
+                    self.remember(&signature);
+                }
+                (narrowed, DecidedBy::User)
+            }
         };
 
         {
             let mut log = self.log.lock().unwrap_or_else(|e| e.into_inner());
             if is_allow(decision) {
-                if risk == crate::model::RiskClass::Outbound {
+                if risk == RiskClass::Outbound {
                     log.outbound.push(request.title.clone());
                 }
             } else {
@@ -871,6 +926,9 @@ impl Decider {
                     "title": request.title,
                     "kind": request.kind,
                     "locations": request.locations,
+                    "decision": decision,
+                    "connector": connector,
+                    "signature": signature,
                 })),
         );
         self.recorder.emit_or_log(CoreEvent::PermissionResolved {
@@ -880,6 +938,50 @@ impl Decider {
             by,
         });
         decision
+    }
+
+    fn ui_mode(&self) -> UiMode {
+        self.recorder
+            .store
+            .setting::<Settings>(Settings::KEY)
+            .ok()
+            .flatten()
+            .map(|settings| settings.mode)
+            .unwrap_or_default()
+    }
+
+    /// Whether the user already said "always" to this call for this Project
+    /// (§3.3). The table is applied again at lookup: an "always" given for a
+    /// command in Developer mode does not carry into Everyday mode, where
+    /// the offer was never made.
+    fn allowed_before(&self, signature: &str, risk: RiskClass, mode: UiMode) -> bool {
+        policy::always_allowed(risk, mode) && self.remembered().iter().any(|s| s == signature)
+    }
+
+    fn remembered(&self) -> Vec<String> {
+        self.recorder
+            .store
+            .setting::<Vec<String>>(&policy::always_key(self.recorder.project_id))
+            .unwrap_or_else(|error| {
+                tracing::error!(%error, "could not read the \"always\" decisions");
+                None
+            })
+            .unwrap_or_default()
+    }
+
+    fn remember(&self, signature: &str) {
+        let mut signatures = self.remembered();
+        if signatures.iter().any(|s| s == signature) {
+            return;
+        }
+        signatures.push(signature.to_owned());
+        if let Err(error) = self
+            .recorder
+            .store
+            .set_setting(&policy::always_key(self.recorder.project_id), &signatures)
+        {
+            tracing::error!(%error, "could not remember an \"always\" decision");
+        }
     }
 }
 
@@ -914,48 +1016,6 @@ impl Recorder {
         if let Err(error) = self.store.append_audit(&entry.for_project(self.project_id)) {
             tracing::error!(%error, "a decision could not be written down");
         }
-    }
-}
-
-/// The risk table from `docs/plan/06-plan-gate-permissions.md` §3.1, without
-/// the Connector lookup: no Connector registry exists yet (M6-T08), and
-/// `policy::classify` (M4-T02) takes this over with one.
-///
-/// Two rules are worth keeping in sight. A call that names no file is
-/// `Destructive`, not `Reversible`: an engine that will not say what it is
-/// about to touch is a reason to ask. And anything unrecognised is `Execute`,
-/// never `Read`.
-fn classify(kind: &str, locations: &[String], root: &Path) -> crate::model::RiskClass {
-    use crate::model::RiskClass;
-    match kind {
-        "read" | "search" | "think" | "other" | "" => RiskClass::Read,
-        "edit" | "delete" | "move" => {
-            if locations.is_empty() {
-                return RiskClass::Destructive;
-            }
-            if locations
-                .iter()
-                .all(|path| crate::paths::is_inside(path, root))
-            {
-                RiskClass::Reversible
-            } else {
-                // Outside the Project is outside the Journal: nothing here
-                // could take it back.
-                RiskClass::Destructive
-            }
-        }
-        "fetch" => crate::model::RiskClass::Outbound,
-        _ => RiskClass::Execute,
-    }
-}
-
-/// `None` means only a person can answer this one.
-fn settled_by_policy(risk: crate::model::RiskClass) -> Option<Decision> {
-    use crate::model::RiskClass;
-    match risk {
-        // Undo covers it, so asking would be theatre.
-        RiskClass::Read | RiskClass::Reversible => Some(Decision::AllowOnce),
-        RiskClass::Execute | RiskClass::Outbound | RiskClass::Destructive => None,
     }
 }
 
@@ -1024,77 +1084,6 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::RiskClass;
-
-    fn root() -> PathBuf {
-        let dir = std::env::temp_dir().join("eavery-classify");
-        std::fs::create_dir_all(&dir).unwrap();
-        crate::paths::canonical_or_self(&dir)
-    }
-
-    #[test]
-    fn reads_are_read_whatever_they_read() {
-        let root = root();
-        assert_eq!(classify("read", &[], &root), RiskClass::Read);
-        assert_eq!(classify("search", &[], &root), RiskClass::Read);
-        assert_eq!(
-            classify("read", &["/somewhere/else.txt".into()], &root),
-            RiskClass::Read
-        );
-    }
-
-    #[test]
-    fn an_edit_inside_the_project_is_reversible_and_outside_it_is_not() {
-        let root = root();
-        let inside = root.join("report.docx").display().to_string();
-        assert_eq!(
-            classify("edit", std::slice::from_ref(&inside), &root),
-            RiskClass::Reversible
-        );
-        assert_eq!(
-            classify("delete", &[inside, "/etc/hosts".into()], &root),
-            RiskClass::Destructive,
-            "one file outside the Project is enough: Undo could not take it back"
-        );
-    }
-
-    /// An engine that will not say what it is about to change is a reason to
-    /// ask, not a reason to relax.
-    #[test]
-    fn an_edit_that_names_no_file_is_destructive() {
-        assert_eq!(classify("edit", &[], &root()), RiskClass::Destructive);
-    }
-
-    #[test]
-    fn anything_unrecognised_is_execute_and_never_read() {
-        let root = root();
-        assert_eq!(classify("execute", &[], &root), RiskClass::Execute);
-        assert_eq!(classify("something_new", &[], &root), RiskClass::Execute);
-        assert_eq!(classify("fetch", &[], &root), RiskClass::Outbound);
-    }
-
-    #[test]
-    fn the_policy_answers_for_what_undo_covers_and_nothing_else() {
-        assert_eq!(
-            settled_by_policy(RiskClass::Read),
-            Some(Decision::AllowOnce)
-        );
-        assert_eq!(
-            settled_by_policy(RiskClass::Reversible),
-            Some(Decision::AllowOnce)
-        );
-        for risk in [
-            RiskClass::Execute,
-            RiskClass::Outbound,
-            RiskClass::Destructive,
-        ] {
-            assert_eq!(
-                settled_by_policy(risk),
-                None,
-                "{risk:?} is not ours to allow"
-            );
-        }
-    }
 
     #[test]
     fn a_label_is_the_request_shortened_on_a_character_boundary() {

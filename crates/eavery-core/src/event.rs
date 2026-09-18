@@ -9,6 +9,7 @@ use ts_rs::TS;
 
 use crate::engine::EngineError;
 use crate::model::{Checkpoint, CheckpointId, EngineStatus, Plan, RiskClass, TurnId, TurnPhase};
+use crate::policy::AlwaysOffer;
 
 /// How many lines of the engine's stderr travel with a crash
 /// (`docs/plan/10-task-breakdown.md` M1-T08). The connection keeps more than
@@ -206,6 +207,23 @@ pub struct PermissionView {
     pub options: Vec<PermissionOption>,
     /// Vocabulary-neutral facts — paths, hosts — for the UI to phrase.
     pub explanation: String,
+    /// The engine's `rawInput` for the call, when it sent one. The policy
+    /// matches Connector names and plan-exit signatures against it.
+    #[serde(default)]
+    #[ts(type = "unknown")]
+    pub raw_input: Option<serde_json::Value>,
+    /// Whether the dialog may offer "always", per the decision table
+    /// (`docs/plan/06-plan-gate-permissions.md` §3.2). The UI applies the
+    /// mode; the core narrows an answer the table forbids regardless.
+    #[serde(default = "AlwaysOffer::never")]
+    pub always: AlwaysOffer,
+    /// For something that would leave the machine: whether the plan listed
+    /// it. `None` otherwise.
+    #[serde(default)]
+    pub in_plan: Option<bool>,
+    /// The Connector the call belongs to, when the policy could tell.
+    #[serde(default)]
+    pub connector: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, TS)]
@@ -384,6 +402,10 @@ mod tests {
                         kind: "allow_once".into(),
                     }],
                     explanation: "report.md, inside this project".into(),
+                    raw_input: None,
+                    always: AlwaysOffer::Never,
+                    in_plan: None,
+                    connector: None,
                 },
             },
             CoreEvent::PermissionResolved {

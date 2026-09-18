@@ -65,6 +65,11 @@ export const dictionary = {
     everyday: "Eavery wants to do something it has to ask about: {what}",
     developer: "{risk}: {what}",
   },
+  permInPlan: { everyday: "This was in the plan.", developer: "This was in the plan." },
+  permNotInPlan: {
+    everyday: "This was NOT in the plan.",
+    developer: "This was NOT in the plan.",
+  },
   allowOnce: { everyday: "Allow this time", developer: "Allow once" },
   allowAlways: { everyday: "Always allow in this Project", developer: "Allow always" },
   reject: { everyday: "Don't", developer: "Reject" },

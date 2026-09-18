@@ -7,6 +7,12 @@
 // One type per line, in name order: a diff here is a list of the types that
 // changed shape, which is the question anyone reviewing this file has.
 
+/**
+ * Whether the permission dialog may offer "always" (the last column of
+ * §3.2). Serialised for the UI, which knows the mode.
+ */
+export type AlwaysOffer = "never" | "yes" | "developer_only";
+
 export type AppError = { code: ErrorCode, message: string, 
 /**
  * What the person can do about it, in their own words. `None` when there
@@ -204,7 +210,27 @@ options: Array<PermissionOption>,
 /**
  * Vocabulary-neutral facts — paths, hosts — for the UI to phrase.
  */
-explanation: string, };
+explanation: string, 
+/**
+ * The engine's `rawInput` for the call, when it sent one. The policy
+ * matches Connector names and plan-exit signatures against it.
+ */
+raw_input: unknown, 
+/**
+ * Whether the dialog may offer "always", per the decision table
+ * (`docs/plan/06-plan-gate-permissions.md` §3.2). The UI applies the
+ * mode; the core narrows an answer the table forbids regardless.
+ */
+always: AlwaysOffer, 
+/**
+ * For something that would leave the machine: whether the plan listed
+ * it. `None` otherwise.
+ */
+in_plan: boolean | null, 
+/**
+ * The Connector the call belongs to, when the policy could tell.
+ */
+connector: string | null, };
 
 /**
  * What the engine says it will do, shown to the user before anything runs.

@@ -14,6 +14,7 @@ use eavery_core::engine::{
 };
 use eavery_core::event::{Decision, PermissionOption, PermissionView};
 use eavery_core::model::{EngineInfo, RiskClass, SessionMode};
+use eavery_core::policy;
 use serde_json::{Value, json};
 use tokio::sync::RwLock;
 
@@ -322,6 +323,10 @@ impl Engine for AcpEngine {
         Ok(())
     }
 
+    async fn set_writes_allowed(&self, allowed: bool) {
+        self.shared.fs.set_writes_allowed(allowed);
+    }
+
     async fn stderr_tail(&self) -> Vec<String> {
         match self.connection.read().await.as_ref() {
             Some(connection) => connection.stderr_tail().await,
@@ -377,6 +382,8 @@ impl Shared {
         let kind = request.tool_call.kind.unwrap_or_else(|| "other".to_owned());
         let title = request.tool_call.title.unwrap_or_default();
 
+        let risk = provisional_risk(&kind);
+        let verdict = policy::prompt_for(risk);
         let view = PermissionView {
             // The plan calls for the JSON-RPC id here, but the handler runs
             // after the id has been consumed by the dispatcher, and the tool
@@ -384,11 +391,16 @@ impl Shared {
             request_id: request.tool_call.tool_call_id.clone(),
             tool_call_id: request.tool_call.tool_call_id.clone(),
             title: title.clone(),
-            risk: provisional_risk(&kind),
+            risk,
             options,
             explanation: explain(&kind, &locations),
             kind,
             locations,
+            raw_input: request.tool_call.raw_input.clone(),
+            always: verdict.always(),
+            in_plan: verdict.in_plan(),
+            // Only the turn engine has the registry.
+            connector: None,
         };
 
         let handler = {
@@ -463,9 +475,7 @@ impl Shared {
             .map_err(|error| HandlerError::refused(format!("malformed write request: {error}")))?;
 
         if !self.fs.writes_allowed() {
-            return Err(HandlerError::refused(
-                "Eavery is in planning mode; no changes are allowed yet",
-            ));
+            return Err(HandlerError::refused(policy::PLANNING_WRITE_REFUSAL));
         }
 
         let path = PathBuf::from(&request.path);
@@ -498,8 +508,8 @@ impl Shared {
 ///
 /// It is provisional on purpose: the real classification needs the Project root
 /// and the Connector registry, neither of which this layer has, so
-/// `eavery-core::policy::classify` (M4-T02) reclassifies before anything is
-/// decided. Anything unrecognised lands on `Execute`, never on `Read`.
+/// `eavery-core::policy::classify` reclassifies before anything is decided.
+/// Anything unrecognised lands on `Execute`, never on `Read`.
 fn provisional_risk(kind: &str) -> RiskClass {
     match kind {
         "read" | "search" | "think" | "other" => RiskClass::Read,
