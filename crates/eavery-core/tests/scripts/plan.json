@@ -1,0 +1,69 @@
+{
+  "initialize": { "agentInfo": { "name": "fake", "version": "0.0.1" }, "loadSession": false },
+  "session": {
+    "modes": {
+      "currentModeId": "work",
+      "availableModes": [
+        { "id": "work", "name": "Work" },
+        { "id": "plan", "name": "Plan" }
+      ]
+    }
+  },
+  "turns": [
+    {
+      "match": "write a plan",
+      "actions": [
+        { "thought": "Looking around" },
+        {
+          "tool_call": {
+            "id": "t1",
+            "title": "Read report.txt",
+            "kind": "read",
+            "status": "completed",
+            "locations": ["{{cwd}}/report.txt"]
+          }
+        },
+        {
+          "request_permission": {
+            "toolCallId": "t2",
+            "title": "Edit report.txt",
+            "kind": "edit",
+            "locations": ["{{cwd}}/report.txt"],
+            "expect": "reject_once"
+          }
+        },
+        {
+          "request_permission": {
+            "toolCallId": "t3",
+            "title": "ExitPlanMode",
+            "kind": "other",
+            "expect": "reject_once"
+          }
+        },
+        { "fs_write": { "path": "{{cwd}}/report.txt", "text": "FY26\n", "expect_refused": true } },
+        {
+          "text": "I will update the report.\n\n```eavery-plan\n{\"summary\":\"Update the report\",\"steps\":[\"Open report.txt\",\"Change FY25 to FY26\"],\"files_touched\":[\"report.txt\"],\"outbound\":[],\"irreversible\":[],\"will_not_do\":[\"send any email\"]}\n```"
+        },
+        { "stop": "end_turn" }
+      ]
+    },
+    {
+      "match": "approved this plan",
+      "actions": [
+        {
+          "request_permission": {
+            "toolCallId": "t4",
+            "title": "Edit report.txt",
+            "kind": "edit",
+            "locations": ["{{cwd}}/report.txt"],
+            "expect": "allow_once"
+          }
+        },
+        { "fs_write": { "path": "{{cwd}}/report.txt", "text": "FY26\n" } },
+        { "tool_call": { "id": "t4", "title": "Edit report.txt", "kind": "edit", "status": "completed", "locations": ["{{cwd}}/report.txt"] } },
+        { "text": "Done. Changed one number." },
+        { "stop": "end_turn" }
+      ]
+    }
+  ]
+}

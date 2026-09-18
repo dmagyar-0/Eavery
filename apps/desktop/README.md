@@ -64,9 +64,11 @@ Two rules hold everywhere under `screens/` and `components/`:
 
 M3-T01 to M3-T09 bar the milestone's exit test: the window, the generated
 types, the state, the commands, the screens, the transcript and its dialogs,
-the history with Undo and Redo, and the Diagnostics panel. "Plan it" is
-disabled until the plan gate (M4); the Documents tree is M5-T04; install and
-sign-in buttons are M7. The task list is
+the history with Undo and Redo, and the Diagnostics panel. M4-T07: the plan
+card, with "Plan it" as the composer's primary button — the plan is shown
+in the transcript and nothing runs until Go ahead is pressed; Stop while it
+waits ends the turn. The Documents tree is M5-T04; install and sign-in
+buttons are M7. The task list is
 [`docs/plan/10-task-breakdown.md`](../../docs/plan/10-task-breakdown.md).
 
 ## Trying it without an assistant
@@ -86,4 +88,6 @@ EAVERY_DATA_DIR=/tmp/eavery-trial pnpm tauri dev
 Then Settings → make the fake engine the default, Home → open a copy of a
 folder, and ask for "notes": the script asks permission to create a file,
 creates it, and the transcript, the Digest, the history and Undo are all
-real.
+real. With `plan.json` instead, and a `report.txt` in the folder, "Plan it"
+on "rename FY25 to FY26" shows the plan gate: the plan card, the refused
+edit in the trail, and the change only after Go ahead.

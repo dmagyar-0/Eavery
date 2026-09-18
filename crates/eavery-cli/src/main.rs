@@ -19,6 +19,7 @@ use eavery_acp::{AcpEngine, LaunchSpec};
 use eavery_core::engine::{Engine, RawAgentEvent, StopReason};
 use eavery_core::event::{Decision, PermissionView};
 use eavery_core::model::EngineStatus;
+use eavery_core::turn::Approval;
 use eavery_engines::discovery::Resolver;
 use eavery_engines::health::{self, HealthOptions};
 use eavery_engines::spec::EngineSpec;
@@ -93,6 +94,20 @@ pub struct RunArgs {
     /// Answer every permission request this way instead of asking.
     #[arg(long, value_parser = ["allow", "reject"])]
     pub answer: Option<String>,
+
+    /// Plan first: the engine says what it would do, and nothing runs until
+    /// the plan is approved (`docs/plan/06-plan-gate-permissions.md`).
+    #[arg(long)]
+    pub plan: bool,
+
+    /// Answer the plan this way instead of asking. Without it, the plan is
+    /// put to the terminal; with no terminal attached, it is rejected.
+    #[arg(long, value_parser = ["yes", "no"], requires = "plan")]
+    pub approve: Option<String>,
+
+    /// Changes to the plan, sent along with a yes.
+    #[arg(long, requires = "plan")]
+    pub edits: Option<String>,
 
     /// The request to send.
     pub request: String,
@@ -559,23 +574,54 @@ pub async fn answer_permission(view: &PermissionView, fixed: Option<&str>) -> De
     read_answer().await
 }
 
+/// Answers a plan: from `--approve` (and `--edits`) when given, otherwise
+/// from the terminal. Nobody at the terminal means no: a plan nobody read
+/// is never carried out.
+pub async fn answer_plan(fixed: Option<&str>, edits: Option<&str>) -> Approval {
+    let edits = edits
+        .map(str::to_owned)
+        .filter(|edits| !edits.trim().is_empty());
+    match fixed {
+        Some("yes") => return Approval::Approved { edits },
+        Some("no") => return Approval::Rejected,
+        _ => {}
+    }
+    if !std::io::stdin().is_terminal() {
+        println_flush(render::plan_unattended());
+        return Approval::Rejected;
+    }
+    println_flush("         [y]es / [n]o, or type the changes you want:");
+    let line = read_line().await.unwrap_or_default();
+    match line.trim() {
+        "y" | "yes" => Approval::Approved { edits },
+        "" | "n" | "no" => Approval::Rejected,
+        changes => Approval::Approved {
+            edits: Some(changes.to_owned()),
+        },
+    }
+}
+
 /// Reads one line from the terminal. Reading blocks, so it runs on the
 /// blocking pool: whatever else is streaming keeps streaming.
-async fn read_answer() -> Decision {
-    let answer = tokio::task::spawn_blocking(|| {
+async fn read_line() -> Option<String> {
+    tokio::task::spawn_blocking(|| {
         let mut line = String::new();
         std::io::stdin().read_line(&mut line).map(|_| line)
     })
-    .await;
+    .await
+    .ok()?
+    .ok()
+}
 
-    match answer {
-        Ok(Ok(line)) => match line.trim().to_lowercase().as_str() {
+async fn read_answer() -> Decision {
+    match read_line().await {
+        Some(line) => match line.trim().to_lowercase().as_str() {
             "a" | "allow" | "y" | "yes" => Decision::AllowOnce,
             "r" | "reject" | "n" | "no" => Decision::RejectOnce,
             // Anything else, including an empty line, is not consent.
             _ => Decision::RejectOnce,
         },
-        _ => Decision::RejectOnce,
+        None => Decision::RejectOnce,
     }
 }
 

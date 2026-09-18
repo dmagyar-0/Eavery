@@ -138,11 +138,16 @@ export const dictionary = {
   },
   composerHint: same("Enter to send, Shift+Enter for a new line"),
   planIt: same("Plan it"),
-  planItSoon: {
-    everyday: "Planning first arrives soon. For now, ask directly.",
-    developer: "The plan gate is M4. Direct mode only.",
+  planItHint: {
+    everyday: "Eavery says what it would do first. Nothing changes until you say go.",
+    developer: "Plan phase under the plan gate, then approve, then execute.",
   },
   askDirect: { everyday: "Ask", developer: "Run" },
+  askDirectHint: {
+    everyday: "For a question. Eavery answers without a plan.",
+    developer: "Direct mode: the execute prompt only. The policy still applies.",
+  },
+  planWaiting: { everyday: "Waiting for you to decide", developer: "Awaiting approval" },
   stop: same("Stop"),
   noSessionYet: {
     everyday: "Nothing has been asked in this Project yet.",
@@ -155,6 +160,7 @@ export const dictionary = {
   turnPhase: { everyday: null, developer: "phase: {phase}" },
   turnFinished: { everyday: "Finished", developer: "turn finished: {reason}" },
   turnStopped: { everyday: "Stopped", developer: "turn cancelled" },
+  turnPlanRejected: { everyday: "Not this time. Nothing was changed.", developer: "plan rejected; nothing executed" },
   turnFailed: { everyday: "Stopped early", developer: "turn failed" },
   planEntries: { everyday: "Steps", developer: "Plan entries" },
   planReady: { everyday: "Here's my plan", developer: "Plan ready" },
@@ -182,6 +188,16 @@ export const dictionary = {
   toolStatus: { everyday: null, developer: "{status}" },
   toolLocations: { everyday: null, developer: "{locations}" },
   toolRisk: { everyday: null, developer: "risk: {risk}" },
+
+  // ---- Plan card -----------------------------------------------------------
+  planFiles: { everyday: "Documents it would change", developer: "files_touched" },
+  planOutbound: { everyday: "Would leave this computer", developer: "outbound" },
+  planIrreversible: { everyday: "Could not be undone", developer: "irreversible" },
+  planWillNotDo: { everyday: "It will not", developer: "will_not_do" },
+  planEdits: { everyday: "Your changes", developer: "user_edits" },
+  planEditsPlaceholder: { everyday: "Anything to change before it starts?", developer: "Edits appended to the execute prompt" },
+  planSentTo: { everyday: "Your documents are sent to {vendor}.", developer: "Documents sent to {vendor}." },
+  planRaw: { everyday: null, developer: "Raw reply" },
 
   // ---- Digest --------------------------------------------------------------
   digestNothing: { everyday: "Nothing changed in your files.", developer: "No file changes." },

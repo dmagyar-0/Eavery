@@ -275,6 +275,54 @@ impl EngineError {
     }
 }
 
+/// What the turn engine needs to know about an engine beyond what the
+/// [`Engine`] trait can tell it: the rows of the engine table
+/// (`docs/plan/04-acp-engines.md` §2) that the plan gate and the plan card
+/// read. `eavery-engines` fills one in from its `EngineSpec`; the tests use
+/// [`Default`], which is an engine with no modes worth switching and nothing
+/// to say about who sees the documents.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct EngineFacts {
+    /// Shown on the plan card: "Your documents are sent to {vendor}".
+    pub vendor: String,
+    /// Mode id substring for the plan phase: the most restrictive mode the
+    /// engine offers. Matched by [`pick_mode`].
+    pub plan_mode_hint: Option<String>,
+    /// Mode id substring for the execute phase: the mode that asks before it
+    /// acts.
+    pub asking_mode_hint: Option<String>,
+    /// Tool titles and `rawInput` markers that mean "leave plan mode". The
+    /// plan gate refuses them (`docs/plan/06-plan-gate-permissions.md` §2.2).
+    pub plan_exit_signatures: Vec<String>,
+}
+
+/// The mode whose id matches `hint`, for [`EngineFacts::plan_mode_hint`] and
+/// [`EngineFacts::asking_mode_hint`].
+///
+/// Matching ignores case and treats `-`, `_` and spaces as the same character,
+/// because engines are not consistent about them and a hint that misses is a
+/// plan phase running in the engine's default mode. An exact id wins over a
+/// substring, so a hint of `plan` prefers `plan` to `planning`.
+pub fn pick_mode<'a>(modes: &'a [SessionMode], hint: Option<&str>) -> Option<&'a SessionMode> {
+    let hint = normalise_mode(hint?);
+    modes
+        .iter()
+        .find(|mode| normalise_mode(&mode.id) == hint)
+        .or_else(|| {
+            modes
+                .iter()
+                .find(|mode| normalise_mode(&mode.id).contains(&hint))
+        })
+}
+
+fn normalise_mode(value: &str) -> String {
+    value
+        .chars()
+        .filter(|c| !matches!(c, '-' | '_' | ' '))
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
 /// The result of opening a session: the engine's session id plus whatever
 /// modes it offers, which the plan gate needs to pick a plan mode.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

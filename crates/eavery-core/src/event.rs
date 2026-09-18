@@ -61,10 +61,14 @@ pub enum CoreEvent {
         decision: Decision,
         by: DecidedBy,
     },
-    /// The plan phase finished and produced something to approve.
+    /// The plan phase finished and produced something to approve. `vendor`
+    /// is who the documents were sent to in order to make it, for the plan
+    /// card's "Your documents are sent to {vendor}" line
+    /// (`docs/plan/06-plan-gate-permissions.md` §2.4).
     PlanReady {
         turn_id: TurnId,
         plan: Plan,
+        vendor: String,
     },
     CheckpointCreated {
         checkpoint: Checkpoint,
@@ -420,6 +424,7 @@ mod tests {
                     steps: vec![PlanStep::new("Open the report")],
                     ..Plan::default()
                 },
+                vendor: "Anthropic".into(),
             },
             CoreEvent::CheckpointCreated {
                 checkpoint: checkpoint(),

@@ -274,11 +274,49 @@ Pass/fail lines are in `01-implementation-plan.md` §4. Code lives in
   `eavery-plan` block as JSON, or the reply with its list items as steps.
   Tests for valid JSON, invalid JSON, the markdown-list fallback, the
   last-block rule, other fenced blocks, and an empty reply.
-- [ ] **M4-T05 (L)** Two-phase turn in `eavery-core::turn`: Planning → AwaitingApproval → Executing; mode switching via `set_mode` using `plan_mode_hint` / `asking_mode_hint`; cancel in each phase; digest with outbound and refused lists (outbound list always present, "Nothing" when empty).
-- [ ] **M4-T06 (M)** Audit log rows for every decision; `list_audit` command (Developer mode view).
-- [ ] **M4-T07 (M)** UI: `PlanCard` including the "Your documents are sent to {vendor}" line, `approve_plan`/`reject_plan` commands, "always" storage.
-- [ ] **M4-T08 (M)** Fake-agent scripts and tests from `06-plan-gate-permissions.md` §7.
+- [x] **M4-T05 (L)** `PENDING` — Two-phase turn in `eavery-core::turn`:
+  `run_turn_in(TurnMode::Plan, ..)` goes Planning → AwaitingApproval →
+  Executing, with the plan prompt under the gate (`Gatekeeper`: writes
+  closed through `set_writes_allowed`, every mutation and every plan-mode
+  exit refused, the §2.2 bypass reported as `PlanGateBypassed`), the plan
+  parsed and emitted as `PlanReady` (with the vendor), an explicit yes
+  awaited through the new `TurnCallbacks::approval` with no timeout, and the
+  execute prompt under the policy with the plan's `outbound` list wording
+  the Outbound questions. Modes: `pick_mode` moved to `eavery-core::engine`,
+  `EngineSpec::facts()` hands the hints in as `EngineFacts`, the plan mode
+  is set before the plan prompt and the asking mode before the execute
+  prompt, a hint that matches nothing is logged and the gate holds. Cancel
+  in Planning reaches the engine; in AwaitingApproval it ends the wait
+  without the engine; in Executing as before. A rejected plan ends
+  `Cancelled` with `stop_reason: "plan_rejected"`. Direct mode now sends the
+  execute prompt with the request where the plan goes (§5). CLI: `run
+  --plan [--approve yes|no] [--edits ..]`, the plan printed in full with
+  "sends" and "forever" lines that always appear. Ten core tests, three CLI
+  tests over real ACP; see `CHANGELOG-plan.md`.
+- [x] **M4-T06 (M)** `PENDING` — Every decision writes an audit row with
+  its actor: `plan_gate` for each planning answer (with `plan_exit`),
+  `user` for `plan_approved` (with the edits) and `plan_rejected`, and
+  `policy` / `user` for the execute phase as before, now with `phase` and
+  `in_plan` in the detail. `list_audit` was in since M3-T04.
+- [x] **M4-T07 (M)** `PENDING` — `PlanCard` in the transcript: summary,
+  steps, documents, "Would leave this computer" and "Could not be undone"
+  (always shown, "Nothing" when empty), "Your documents are sent to
+  {vendor}", the person's edits once approved, the raw reply in Developer
+  mode; while the turn waits, a box for changes and Go ahead / Not now.
+  `approve_plan` / `reject_plan` commands over a `PlanDesk` keyed by turn;
+  "Plan it" is the composer's primary button and Enter. "Always" storage
+  was M4-T02's.
+- [x] **M4-T08 (M)** `PENDING` — `scripts/plan.json` (§7 tests 1 and 2 in
+  one script: an edit refused, a `fs/write_text_file` refused, an
+  `ExitPlanMode` refused, then the approved execute turn) and the CLI
+  tests for it, plus §7 test 3 as a script in `crates/eavery-cli/tests`;
+  test 4 (malformed block) and the cancel and outbound cases are in
+  `crates/eavery-core/tests/turn.rs`; test 6 (permission timeout) has been
+  in `eavery-acp` since M0-T06. The outbound-Connector half of test 3 waits
+  for a registry to fill (M6-T08).
 - [ ] **M4-T09 (S)** M4 exit test with a real engine recorded below.
+  **Blocked on the same thing as M1-T04 to M1-T07**: an engine with a
+  working login.
 
 **M4 exit recorded:** ______
 

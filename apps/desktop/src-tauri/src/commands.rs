@@ -17,7 +17,7 @@ use eavery_core::model::{
     Settings, Turn, TurnId,
 };
 use eavery_core::store::{AuditEntry, StoredEvent};
-use eavery_core::turn::RestoreOutcome;
+use eavery_core::turn::{Approval, RestoreOutcome, TurnMode};
 use eavery_engines::health::HealthOptions;
 use tauri::State;
 
@@ -168,17 +168,13 @@ pub async fn run_health_check(
 
 // ---- turns -----------------------------------------------------------------
 
-/// Which loop a turn runs: straight to work, or plan first.
-#[derive(Clone, Copy, Debug, Default, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum TurnMode {
-    #[default]
-    Direct,
-    Plan,
-}
-
 /// Starts a turn and returns as soon as it has an id; the turn goes on in a
 /// task of its own and reports itself through `core://event`.
+///
+/// `mode` is `plan` (the plan gate: plan, approve, execute) or `direct`
+/// (`docs/plan/06-plan-gate-permissions.md` §1 and §5); left out, it is
+/// direct. A plan-mode turn stops at `AwaitingApproval` and waits for
+/// [`approve_plan`] or [`reject_plan`].
 ///
 /// The Project is claimed before this returns, so "the assistant is already
 /// working" is the answer to this call rather than an error arriving from
@@ -190,13 +186,7 @@ pub async fn start_turn(
     request: String,
     mode: Option<TurnMode>,
 ) -> Result<TurnId, AppError> {
-    if matches!(mode.unwrap_or_default(), TurnMode::Plan) {
-        return Err(
-            AppError::new(ErrorCode::Internal, "planning is not built yet")
-                .with_next_action("Ask directly for now."),
-        );
-    }
-
+    let mode = mode.unwrap_or_default();
     let runner = core.runner(project_id).await?;
     let ticket = runner.claim_turn()?;
     let turn_id = ticket.turn_id();
@@ -205,11 +195,29 @@ pub async fn start_turn(
         // Everything the turn does — including anything that goes wrong — is
         // already an event by the time this returns, so there is nothing to
         // hand back to.
-        if let Err(error) = runner.run_claimed(ticket, &request).await {
+        if let Err(error) = runner.run_claimed(ticket, mode, &request).await {
             tracing::warn!(%error, %turn_id, "the turn did not finish");
         }
     });
     Ok(turn_id)
+}
+
+/// Go ahead with the plan, with `edits` when the person added any (§2.4,
+/// "approve with changes"). Approval is explicit and only ever comes from
+/// here: nothing times out into a yes.
+#[tauri::command]
+pub fn approve_plan(
+    core: State<'_, AppCore>,
+    turn_id: TurnId,
+    edits: Option<String>,
+) -> Result<(), AppError> {
+    core.plans().answer(turn_id, Approval::Approved { edits })
+}
+
+/// Not now. The turn ends `Cancelled` and nothing is executed.
+#[tauri::command]
+pub fn reject_plan(core: State<'_, AppCore>, turn_id: TurnId) -> Result<(), AppError> {
+    core.plans().answer(turn_id, Approval::Rejected)
 }
 
 /// Answers a permission request the person was asked about.

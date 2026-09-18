@@ -10,6 +10,7 @@ import { useStore } from "../store";
 import { blocksFor, type Block } from "../transcript";
 import { useShown, useT, type T } from "../vocab/useT";
 import { Digest } from "./Digest";
+import { PlanCard } from "./PlanCard";
 import { ToolCallRow } from "./ToolCallRow";
 import { permissionTitle } from "./PermissionDialog";
 import type { DecidedBy, Decision } from "../types";
@@ -77,9 +78,7 @@ const Row = memo(function Row({ block }: { block: Block }) {
     case "plan":
       return (
         <div className="row row-plan">
-          <span className="who">{t("planReady")}</span>
-          <p className="prose">{block.plan.summary}</p>
-          {developer ? <pre className="raw">{block.plan.raw_markdown}</pre> : null}
+          <PlanCard plan={block.plan} vendor={block.vendor} turnId={block.turnId} />
         </div>
       );
     case "phase":
@@ -113,9 +112,11 @@ const Row = memo(function Row({ block }: { block: Block }) {
             <span className="muted">
               {block.stopReason === "cancelled"
                 ? t("turnStopped")
-                : block.stopReason === "failed" || block.stopReason === "crashed"
-                  ? t("turnFailed")
-                  : t("turnFinished", { reason: block.stopReason })}
+                : block.stopReason === "plan_rejected"
+                  ? t("turnPlanRejected")
+                  : block.stopReason === "failed" || block.stopReason === "crashed"
+                    ? t("turnFailed")
+                    : t("turnFinished", { reason: block.stopReason })}
             </span>
           )}
         </div>

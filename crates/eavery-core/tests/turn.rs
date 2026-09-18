@@ -11,15 +11,17 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use eavery_core::engine::{
-    Engine, EngineError, EventSink, OpenedSession, PermissionHandler, RawAgentEvent, RawToolCall,
-    RawToolCallUpdate, StopReason,
+    Engine, EngineError, EngineFacts, EventSink, OpenedSession, PermissionHandler, RawAgentEvent,
+    RawToolCall, RawToolCallUpdate, StopReason,
 };
 use eavery_core::event::{CoreEvent, DecidedBy, Decision, PermissionOption, PermissionView};
 use eavery_core::journal::{Journal, Watch};
-use eavery_core::model::{CheckpointKind, Project, RiskClass, TurnPhase};
+use eavery_core::model::{CheckpointKind, Project, RiskClass, SessionMode, TurnPhase};
 use eavery_core::policy::{AlwaysOffer, ConnectorRegistry};
 use eavery_core::store::{Store, StoredEvent};
-use eavery_core::turn::{ProjectRunner, TurnCallbacks, TurnError};
+use eavery_core::turn::{
+    Approval, PLAN_REJECTED, PlanReview, ProjectRunner, TurnCallbacks, TurnError, TurnMode,
+};
 use futures::FutureExt;
 
 // ---- the scripted engine ---------------------------------------------------
@@ -55,25 +57,53 @@ struct TestEngine {
     /// something else while a turn is running. Later prompts run straight
     /// through, or the test would be waiting on a gate nobody opens.
     gate: Mutex<Option<Arc<Gate>>>,
+    /// The modes `session/new` offers, and the one it opens in.
+    modes: Vec<SessionMode>,
+    current_mode: Option<String>,
+    /// Every prompt text, every `set_mode`, and every flip of the write
+    /// gate, in order: what the plan gate is made of, seen from the engine.
+    prompts: Mutex<Vec<String>>,
+    modes_set: Mutex<Vec<String>>,
+    writes_allowed: Mutex<Vec<bool>>,
 }
 
 impl TestEngine {
     fn new(scripts: Vec<Vec<Act>>) -> Arc<Self> {
-        Self::build(scripts, None)
+        Arc::new(Self::build(scripts, None))
     }
 
     fn gated(scripts: Vec<Vec<Act>>, gate: Arc<Gate>) -> Arc<Self> {
-        Self::build(scripts, Some(gate))
+        Arc::new(Self::build(scripts, Some(gate)))
     }
 
-    fn build(scripts: Vec<Vec<Act>>, gate: Option<Arc<Gate>>) -> Arc<Self> {
-        Arc::new(Self {
+    /// An engine that offers modes, the way Claude Code and Codex do.
+    fn with_modes(scripts: Vec<Vec<Act>>, modes: &[&str], current: &str) -> Arc<Self> {
+        let mut engine = Self::build(scripts, None);
+        engine.modes = modes
+            .iter()
+            .map(|id| SessionMode {
+                id: (*id).to_owned(),
+                name: (*id).to_owned(),
+                description: None,
+            })
+            .collect();
+        engine.current_mode = Some(current.to_owned());
+        Arc::new(engine)
+    }
+
+    fn build(scripts: Vec<Vec<Act>>, gate: Option<Arc<Gate>>) -> Self {
+        Self {
             scripts: Mutex::new(scripts.into()),
             cwd: Mutex::new(None),
             answers: Mutex::new(Vec::new()),
             cancelled: Mutex::new(false),
             gate: Mutex::new(gate),
-        })
+            modes: Vec::new(),
+            current_mode: None,
+            prompts: Mutex::new(Vec::new()),
+            modes_set: Mutex::new(Vec::new()),
+            writes_allowed: Mutex::new(Vec::new()),
+        }
     }
 
     fn answers(&self) -> Vec<(String, Decision)> {
@@ -82,6 +112,18 @@ impl TestEngine {
 
     fn was_cancelled(&self) -> bool {
         *self.cancelled.lock().unwrap()
+    }
+
+    fn prompts(&self) -> Vec<String> {
+        self.prompts.lock().unwrap().clone()
+    }
+
+    fn modes_set(&self) -> Vec<String> {
+        self.modes_set.lock().unwrap().clone()
+    }
+
+    fn writes_allowed(&self) -> Vec<bool> {
+        self.writes_allowed.lock().unwrap().clone()
     }
 }
 
@@ -104,22 +146,28 @@ impl Engine for TestEngine {
         *self.cwd.lock().unwrap() = Some(cwd.to_path_buf());
         Ok(OpenedSession {
             session_id: "session-1".into(),
-            modes: Vec::new(),
-            current_mode: None,
+            modes: self.modes.clone(),
+            current_mode: self.current_mode.clone(),
         })
     }
 
-    async fn set_mode(&self, _session: &str, _mode_id: &str) -> Result<(), EngineError> {
+    async fn set_mode(&self, _session: &str, mode_id: &str) -> Result<(), EngineError> {
+        self.modes_set.lock().unwrap().push(mode_id.to_owned());
         Ok(())
+    }
+
+    async fn set_writes_allowed(&self, allowed: bool) {
+        self.writes_allowed.lock().unwrap().push(allowed);
     }
 
     async fn prompt(
         &self,
         _session: &str,
-        _text: &str,
+        text: &str,
         tx: EventSink,
         permission: PermissionHandler,
     ) -> Result<StopReason, EngineError> {
+        self.prompts.lock().unwrap().push(text.to_owned());
         let script = self.scripts.lock().unwrap().pop_front().unwrap_or_default();
         let cwd = self.cwd.lock().unwrap().clone().expect("a session");
 
@@ -191,6 +239,11 @@ impl Engine for TestEngine {
 struct Seen {
     events: Arc<Mutex<Vec<StoredEvent>>>,
     asked: Arc<Mutex<Vec<PermissionView>>>,
+    /// Every plan the person was shown.
+    reviewed: Arc<Mutex<Vec<PlanReview>>>,
+    /// What the person answers a plan with. `None` never answers: the test
+    /// has to cancel the turn.
+    approval: Arc<Mutex<Option<Approval>>>,
 }
 
 impl Seen {
@@ -214,9 +267,19 @@ impl Seen {
             .collect()
     }
 
+    fn reviewed(&self) -> Vec<PlanReview> {
+        self.reviewed.lock().unwrap().clone()
+    }
+
+    fn will_answer_plan(&self, approval: Option<Approval>) {
+        *self.approval.lock().unwrap() = approval;
+    }
+
     fn callbacks(&self, answer: Decision) -> TurnCallbacks {
         let events = Arc::clone(&self.events);
         let asked = Arc::clone(&self.asked);
+        let reviewed = Arc::clone(&self.reviewed);
+        let approval = Arc::clone(&self.approval);
         TurnCallbacks {
             events: Arc::new(move |stored: &StoredEvent| {
                 events.lock().unwrap().push(stored.clone())
@@ -224,6 +287,18 @@ impl Seen {
             permission: Arc::new(move |view: PermissionView| {
                 asked.lock().unwrap().push(view);
                 std::future::ready(answer).boxed()
+            }),
+            approval: Arc::new(move |review: PlanReview| {
+                reviewed.lock().unwrap().push(review);
+                let answer = approval.lock().unwrap().clone();
+                async move {
+                    match answer {
+                        Some(approval) => approval,
+                        // Nobody answers. The turn waits until it is cancelled.
+                        None => std::future::pending().await,
+                    }
+                }
+                .boxed()
             }),
         }
     }
@@ -277,19 +352,66 @@ impl Fixture {
         self.root().join(relative)
     }
 
+    fn read(&self, relative: &str) -> String {
+        std::fs::read_to_string(self.path(relative)).expect("read the file")
+    }
+
     async fn runner(&self, engine: Arc<TestEngine>, answer: Decision) -> Arc<ProjectRunner> {
+        self.runner_with(
+            engine,
+            answer,
+            &EngineFacts::default(),
+            &ConnectorRegistry::default(),
+        )
+        .await
+    }
+
+    async fn runner_with(
+        &self,
+        engine: Arc<TestEngine>,
+        answer: Decision,
+        facts: &EngineFacts,
+        connectors: &ConnectorRegistry,
+    ) -> Arc<ProjectRunner> {
         Arc::new(
             ProjectRunner::open(
                 Arc::clone(&self.store),
                 Arc::clone(&self.journal),
                 engine,
                 "test",
-                &ConnectorRegistry::default(),
+                facts,
+                connectors,
                 self.seen.callbacks(answer),
             )
             .await
             .expect("open the runner"),
         )
+    }
+}
+
+/// The facts the engine table gives a planning engine: a plan mode, a work
+/// mode, and a way of leaving plan mode the gate has to refuse.
+fn planning_facts() -> EngineFacts {
+    EngineFacts {
+        vendor: "Anthropic".into(),
+        plan_mode_hint: Some("plan".into()),
+        asking_mode_hint: Some("default".into()),
+        plan_exit_signatures: vec!["ExitPlanMode".into()],
+    }
+}
+
+/// The reply the plan prompt asks for (`06-plan-gate-permissions.md` §2.3).
+const PLAN_REPLY: &str = "I will update the report.\n\n```eavery-plan\n{\"summary\":\"Update the report\",\"steps\":[\"Open report.txt\",\"Change FY25 to FY26\"],\"files_touched\":[\"report.txt\"],\"outbound\":[\"Send the report to example.com\"],\"irreversible\":[],\"will_not_do\":[\"send any email\"]}\n```";
+
+fn read_of(title: &'static str) -> PermissionView {
+    PermissionView {
+        request_id: format!("r-{title}"),
+        tool_call_id: format!("c-{title}"),
+        title: title.into(),
+        kind: "read".into(),
+        locations: vec![],
+        risk: RiskClass::Read,
+        ..edit_of(Path::new("unused"))
     }
 }
 
@@ -891,6 +1013,610 @@ async fn going_back_while_a_turn_is_running_is_refused() {
     gate.release.notify_one();
     running.await.unwrap().unwrap();
     runner.restore(&first.id).await.expect("free now");
+}
+
+// ---- the plan gate (M4-T05) ------------------------------------------------
+
+/// The whole loop: plan under the gate, wait, execute under the policy. What
+/// the engine sees is two prompts, a mode switch before each, and the write
+/// gate closed for the first; what the person sees is the plan, and the
+/// changes they asked for reach the execute prompt.
+#[tokio::test]
+async fn a_plan_turn_plans_waits_for_a_yes_and_then_executes() {
+    let fixture = Fixture::new();
+    let report = fixture.path("report.txt");
+    let engine = TestEngine::with_modes(
+        vec![
+            vec![
+                Act::Ask(read_of("Read report.txt")),
+                Act::Ask(edit_of(&report)),
+                Act::Text(PLAN_REPLY),
+            ],
+            vec![
+                Act::Ask(edit_of(&report)),
+                Act::Write("report.txt", "FY26\n"),
+            ],
+        ],
+        &["default", "plan", "acceptEdits"],
+        "default",
+    );
+    fixture.seen.will_answer_plan(Some(Approval::Approved {
+        edits: Some("  skip the cover page ".into()),
+    }));
+    let runner = fixture
+        .runner_with(
+            Arc::clone(&engine),
+            Decision::RejectOnce,
+            &planning_facts(),
+            &ConnectorRegistry::default(),
+        )
+        .await;
+
+    let outcome = runner
+        .run_turn_in(TurnMode::Plan, "Rename FY25 to FY26")
+        .await
+        .unwrap();
+
+    assert_eq!(outcome.turn.phase, TurnPhase::Done);
+    assert_eq!(outcome.stop_reason, StopReason::EndTurn);
+    assert_eq!(outcome.digest.files_changed, vec!["report.txt"]);
+    let plan = outcome.turn.plan.clone().expect("the plan is on the turn");
+    assert_eq!(plan.summary, "Update the report");
+    assert_eq!(plan.steps.len(), 2);
+    assert_eq!(plan.user_edits.as_deref(), Some("skip the cover page"));
+
+    // Two prompts: the plan prompt with the request, then the execute prompt
+    // with the plan and the person's changes.
+    let prompts = engine.prompts();
+    assert_eq!(prompts.len(), 2);
+    assert!(
+        prompts[0].contains("They asked: \"Rename FY25 to FY26\""),
+        "{}",
+        prompts[0]
+    );
+    assert!(prompts[0].contains("write a plan"), "{}", prompts[0]);
+    assert!(
+        prompts[1].contains("approved this plan:\nUpdate the report"),
+        "{}",
+        prompts[1]
+    );
+    assert!(prompts[1].contains("1. Open report.txt"), "{}", prompts[1]);
+    assert!(
+        prompts[1].contains("They added these changes to the plan: skip the cover page"),
+        "{}",
+        prompts[1]
+    );
+
+    // §2.1: plan mode before the plan prompt, the asking mode before the
+    // execute prompt. §2.2: writes closed for planning, open again after.
+    assert_eq!(engine.modes_set(), vec!["plan", "default"]);
+    assert_eq!(engine.writes_allowed(), vec![false, true]);
+
+    // The gate answered the plan phase: the read went through, the edit was
+    // refused, nobody was asked. The policy answered the execute phase: the
+    // edit inside the Project went through.
+    assert_eq!(
+        engine.answers(),
+        vec![
+            ("Read report.txt".to_owned(), Decision::AllowOnce),
+            (format!("Edit {}", report.display()), Decision::RejectOnce),
+            (format!("Edit {}", report.display()), Decision::AllowOnce),
+        ]
+    );
+    assert!(fixture.seen.asked().is_empty(), "the plan gate never asks");
+    assert_eq!(
+        outcome.digest.refused_actions,
+        vec![format!("Edit {}", report.display())],
+        "what the gate refused is in the digest"
+    );
+
+    // The person was shown the plan, with who saw the documents.
+    let reviewed = fixture.seen.reviewed();
+    assert_eq!(reviewed.len(), 1);
+    assert_eq!(reviewed[0].turn_id, outcome.turn.id);
+    assert_eq!(reviewed[0].plan.summary, "Update the report");
+    assert_eq!(reviewed[0].vendor, "Anthropic");
+
+    // And the transcript reads in the order it happened.
+    let kinds = fixture.seen.kinds();
+    assert_eq!(
+        kinds,
+        vec![
+            "engine_status",
+            "turn_started",
+            "checkpoint_created",
+            "permission_requested",
+            "permission_resolved",
+            "permission_requested",
+            "permission_resolved",
+            "agent_text",
+            "phase_changed",
+            "plan_ready",
+            "phase_changed",
+            "permission_requested",
+            "permission_resolved",
+            "checkpoint_created",
+            "turn_finished",
+        ]
+    );
+    let phases: Vec<TurnPhase> = fixture
+        .seen
+        .events()
+        .iter()
+        .filter_map(|stored| match &stored.event {
+            CoreEvent::TurnStarted { phase, .. } | CoreEvent::PhaseChanged { phase, .. } => {
+                Some(*phase)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        phases,
+        vec![
+            TurnPhase::Planning,
+            TurnPhase::AwaitingApproval,
+            TurnPhase::Executing
+        ]
+    );
+    let ready = fixture
+        .seen
+        .events()
+        .into_iter()
+        .find_map(|stored| match stored.event {
+            CoreEvent::PlanReady { plan, vendor, .. } => Some((plan, vendor)),
+            _ => None,
+        })
+        .expect("a plan_ready event");
+    assert_eq!(ready.0.summary, "Update the report");
+    assert_eq!(ready.1, "Anthropic");
+
+    // Every decision is on the record, with who made it (M4-T06).
+    let audit = fixture.store.list_audit(None, None).unwrap();
+    let rows: Vec<(DecidedBy, String)> = audit
+        .iter()
+        .rev()
+        .map(|entry| (entry.actor, entry.action.clone()))
+        .collect();
+    assert_eq!(
+        rows,
+        vec![
+            (DecidedBy::PlanGate, "allow_once".into()),
+            (DecidedBy::PlanGate, "reject_once".into()),
+            (DecidedBy::User, "plan_approved".into()),
+            (DecidedBy::Policy, "allow_once".into()),
+        ]
+    );
+    let approved = audit
+        .iter()
+        .find(|entry| entry.action == "plan_approved")
+        .unwrap();
+    assert_eq!(approved.detail["edits"], "skip the cover page");
+    assert_eq!(approved.turn_id, Some(outcome.turn.id));
+}
+
+/// §2.4: no means nothing runs. One prompt was sent, the files are as they
+/// were, and the turn says why it ended.
+#[tokio::test]
+async fn a_plan_that_is_rejected_runs_nothing() {
+    let fixture = Fixture::new();
+    let engine = TestEngine::new(vec![
+        vec![Act::Text(PLAN_REPLY)],
+        vec![Act::Write("report.txt", "FY26\n")],
+    ]);
+    fixture.seen.will_answer_plan(Some(Approval::Rejected));
+    let runner = fixture
+        .runner(Arc::clone(&engine), Decision::RejectOnce)
+        .await;
+
+    let outcome = runner
+        .run_turn_in(TurnMode::Plan, "Rename FY25 to FY26")
+        .await
+        .unwrap();
+
+    assert_eq!(outcome.turn.phase, TurnPhase::Cancelled);
+    assert_eq!(outcome.stop_reason, StopReason::Cancelled);
+    assert_eq!(
+        engine.prompts().len(),
+        1,
+        "the execute prompt was never sent"
+    );
+    assert!(outcome.digest.files_changed.is_empty());
+    assert_eq!(fixture.read("report.txt"), "FY25\n");
+    assert!(
+        outcome.turn.post_checkpoint.is_some(),
+        "the turn is still bracketed"
+    );
+    assert_eq!(
+        outcome.turn.plan.map(|plan| plan.summary),
+        Some("Update the report".into()),
+        "the plan that was refused stays on the turn"
+    );
+
+    let finished = fixture
+        .seen
+        .events()
+        .into_iter()
+        .find_map(|stored| match stored.event {
+            CoreEvent::TurnFinished { stop_reason, .. } => Some(stop_reason),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(finished, PLAN_REJECTED);
+    assert_eq!(
+        fixture.store.turn(outcome.turn.id).unwrap().unwrap().phase,
+        TurnPhase::Cancelled
+    );
+    let audit = fixture.store.list_audit(None, None).unwrap();
+    assert_eq!(audit[0].actor, DecidedBy::User);
+    assert_eq!(audit[0].action, "plan_rejected");
+    assert!(
+        engine.writes_allowed().ends_with(&[true]),
+        "writes are open again"
+    );
+}
+
+/// Stop, pressed while the plan waits: there is no prompt in flight to
+/// cancel, so the wait itself ends, and the engine is never asked to.
+#[tokio::test]
+async fn stopping_while_a_plan_waits_ends_the_turn_without_the_engine() {
+    let fixture = Fixture::new();
+    let engine = TestEngine::new(vec![vec![Act::Text(PLAN_REPLY)]]);
+    fixture.seen.will_answer_plan(None);
+    let runner = fixture
+        .runner(Arc::clone(&engine), Decision::RejectOnce)
+        .await;
+
+    let running = {
+        let runner = Arc::clone(&runner);
+        tokio::spawn(async move { runner.run_turn_in(TurnMode::Plan, "Rename the year").await })
+    };
+    // Until the plan is up there is nothing to stop but the engine; wait for
+    // the turn to reach the wait.
+    let waited = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while runner.awaiting_approval().is_none() {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await;
+    assert!(waited.is_ok(), "the turn never reached AwaitingApproval");
+    assert_eq!(runner.awaiting_approval(), runner.running_turn());
+
+    runner.cancel().await.unwrap();
+
+    let outcome = running.await.unwrap().unwrap();
+    assert!(!engine.was_cancelled(), "nothing was in flight to cancel");
+    assert_eq!(outcome.turn.phase, TurnPhase::Cancelled);
+    assert_eq!(engine.prompts().len(), 1);
+    assert!(runner.running_turn().is_none(), "the Project is free again");
+    assert!(runner.awaiting_approval().is_none());
+}
+
+/// Stop during planning reaches the engine, and the turn ends there: no
+/// plan, no wait, writes open again for the next turn.
+#[tokio::test]
+async fn stopping_during_planning_ends_the_turn_before_any_plan() {
+    let fixture = Fixture::new();
+    let engine = TestEngine::new(vec![vec![
+        Act::Text("Looking around..."),
+        Act::Stop(StopReason::Cancelled),
+    ]]);
+    fixture
+        .seen
+        .will_answer_plan(Some(Approval::Approved { edits: None }));
+    let runner = fixture
+        .runner(Arc::clone(&engine), Decision::RejectOnce)
+        .await;
+
+    let outcome = runner
+        .run_turn_in(TurnMode::Plan, "Rename the year")
+        .await
+        .unwrap();
+
+    assert_eq!(outcome.turn.phase, TurnPhase::Cancelled);
+    assert_eq!(outcome.stop_reason, StopReason::Cancelled);
+    assert!(outcome.turn.plan.is_none());
+    assert!(fixture.seen.reviewed().is_empty(), "nothing to approve");
+    assert!(!fixture.seen.kinds().contains(&"plan_ready".to_owned()));
+    assert_eq!(engine.writes_allowed(), vec![false, true]);
+}
+
+/// §2.2: leaving plan mode is refused whatever kind the engine gave the
+/// call, and a plain read is not.
+#[tokio::test]
+async fn the_plan_gate_refuses_leaving_plan_mode_whatever_its_kind() {
+    let fixture = Fixture::new();
+    let engine = TestEngine::new(vec![vec![
+        Act::Ask(read_of("Read report.txt")),
+        Act::Ask(read_of("ExitPlanMode")),
+        Act::Text(PLAN_REPLY),
+    ]]);
+    fixture.seen.will_answer_plan(Some(Approval::Rejected));
+    let runner = fixture
+        .runner_with(
+            Arc::clone(&engine),
+            Decision::AllowOnce,
+            &planning_facts(),
+            &ConnectorRegistry::default(),
+        )
+        .await;
+
+    runner
+        .run_turn_in(TurnMode::Plan, "Rename the year")
+        .await
+        .unwrap();
+
+    assert_eq!(
+        engine.answers(),
+        vec![
+            ("Read report.txt".to_owned(), Decision::AllowOnce),
+            ("ExitPlanMode".to_owned(), Decision::RejectOnce),
+        ]
+    );
+    assert!(
+        fixture.seen.asked().is_empty(),
+        "the gate decides on its own; the person is never asked during planning"
+    );
+    let resolved: Vec<(Decision, DecidedBy)> = fixture
+        .seen
+        .events()
+        .iter()
+        .filter_map(|stored| match &stored.event {
+            CoreEvent::PermissionResolved { decision, by, .. } => Some((*decision, *by)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        resolved,
+        vec![
+            (Decision::AllowOnce, DecidedBy::PlanGate),
+            (Decision::RejectOnce, DecidedBy::PlanGate),
+        ]
+    );
+    let audit = fixture.store.list_audit(None, None).unwrap();
+    let exit = audit
+        .iter()
+        .find(|entry| entry.detail["title"] == "ExitPlanMode")
+        .unwrap();
+    assert_eq!(exit.actor, DecidedBy::PlanGate);
+    assert_eq!(exit.detail["plan_exit"], true);
+    assert_eq!(exit.detail["phase"], "planning");
+}
+
+/// §2.2, last paragraph: an edit that completes during planning without a
+/// permission request on the way means the engine went round its own
+/// asking mode. It is reported, and the plan phase carries on.
+#[tokio::test]
+async fn a_change_made_during_planning_without_asking_is_reported() {
+    let fixture = Fixture::new();
+    let report = fixture.path("report.txt");
+    let engine = TestEngine::new(vec![vec![
+        Act::ToolCall(RawToolCall {
+            id: "t1".into(),
+            title: "Edit report.txt".into(),
+            kind: "edit".into(),
+            status: "in_progress".into(),
+            locations: vec![report.display().to_string()],
+            diff_paths: vec![],
+            raw_input: None,
+        }),
+        Act::Write("report.txt", "FY26\n"),
+        Act::Update(RawToolCallUpdate {
+            id: "t1".into(),
+            status: Some("completed".into()),
+            ..Default::default()
+        }),
+        Act::Text(PLAN_REPLY),
+    ]]);
+    fixture.seen.will_answer_plan(Some(Approval::Rejected));
+    let runner = fixture
+        .runner(Arc::clone(&engine), Decision::RejectOnce)
+        .await;
+
+    let outcome = runner
+        .run_turn_in(TurnMode::Plan, "Rename the year")
+        .await
+        .unwrap();
+
+    let errors: Vec<eavery_core::event::ErrorCode> = fixture
+        .seen
+        .events()
+        .iter()
+        .filter_map(|stored| match &stored.event {
+            CoreEvent::Error { code, .. } => Some(*code),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        errors,
+        vec![eavery_core::event::ErrorCode::PlanGateBypassed]
+    );
+    assert_eq!(
+        fixture.seen.reviewed().len(),
+        1,
+        "the plan phase finished normally"
+    );
+    // The Journal has what it changed: the digest names it, and Undo covers it.
+    assert_eq!(outcome.digest.files_changed, vec!["report.txt"]);
+    assert!(outcome.digest.undo_to.is_some());
+}
+
+/// A mutation that did ask during planning is not a bypass, even when the
+/// engine then reports it completed (some do, with a failed status inside).
+#[tokio::test]
+async fn a_change_that_asked_first_is_not_a_bypass() {
+    let fixture = Fixture::new();
+    let report = fixture.path("report.txt");
+    let mut asked = edit_of(&report);
+    asked.tool_call_id = "t1".into();
+    let engine = TestEngine::new(vec![vec![
+        Act::Ask(asked),
+        Act::ToolCall(RawToolCall {
+            id: "t1".into(),
+            title: "Edit report.txt".into(),
+            kind: "edit".into(),
+            status: "completed".into(),
+            locations: vec![report.display().to_string()],
+            diff_paths: vec![],
+            raw_input: None,
+        }),
+        Act::Text(PLAN_REPLY),
+    ]]);
+    fixture.seen.will_answer_plan(Some(Approval::Rejected));
+    let runner = fixture
+        .runner(Arc::clone(&engine), Decision::RejectOnce)
+        .await;
+
+    runner
+        .run_turn_in(TurnMode::Plan, "Rename the year")
+        .await
+        .unwrap();
+
+    assert!(!fixture.seen.kinds().contains(&"error".to_owned()));
+}
+
+/// §2.3, rule 2 (and §7, test 4): no block, or a broken one, and the reply
+/// itself is the plan, with its list items as steps. The turn never fails on
+/// the plan.
+#[tokio::test]
+async fn a_reply_without_a_plan_block_is_the_plan_in_the_engines_own_words() {
+    let fixture = Fixture::new();
+    let engine = TestEngine::new(vec![vec![
+        Act::Text("I would do two things:\n"),
+        Act::Text("- open the report\n- change the year\n\n"),
+        Act::Text("```eavery-plan\n{not json\n```"),
+    ]]);
+    fixture.seen.will_answer_plan(Some(Approval::Rejected));
+    let runner = fixture
+        .runner(Arc::clone(&engine), Decision::RejectOnce)
+        .await;
+
+    let outcome = runner
+        .run_turn_in(TurnMode::Plan, "Rename the year")
+        .await
+        .unwrap();
+
+    let plan = outcome.turn.plan.unwrap();
+    assert_eq!(plan.summary, "I would do two things:");
+    assert_eq!(
+        plan.steps
+            .iter()
+            .map(|step| step.text.as_str())
+            .collect::<Vec<_>>(),
+        vec!["open the report", "change the year"]
+    );
+    assert!(plan.raw_markdown.contains("{not json"));
+    assert_eq!(
+        fixture.seen.reviewed()[0].plan.summary,
+        "I would do two things:"
+    );
+}
+
+/// §3.2, the two Outbound rows: whether the plan listed it changes the
+/// wording of the question and nothing else. Both are asked; neither is
+/// answered by the plan.
+#[tokio::test]
+async fn an_outbound_call_says_whether_the_plan_listed_it_and_is_asked_either_way() {
+    let fixture = Fixture::new();
+    let mut listed = command("Send the report to example.com");
+    listed.kind = "fetch".into();
+    listed.tool_call_id = "f1".into();
+    listed.request_id = "f1".into();
+    let mut unlisted = command("Post to the intranet");
+    unlisted.kind = "fetch".into();
+    unlisted.tool_call_id = "f2".into();
+    unlisted.request_id = "f2".into();
+    let engine = TestEngine::new(vec![
+        vec![Act::Text(PLAN_REPLY)],
+        vec![Act::Ask(listed), Act::Ask(unlisted)],
+    ]);
+    fixture
+        .seen
+        .will_answer_plan(Some(Approval::Approved { edits: None }));
+    let runner = fixture
+        .runner(Arc::clone(&engine), Decision::AllowOnce)
+        .await;
+
+    let outcome = runner.run_turn_in(TurnMode::Plan, "Send it").await.unwrap();
+
+    let asked = fixture.seen.asked();
+    assert_eq!(asked.len(), 2, "outbound is never silent, listed or not");
+    assert_eq!(asked[0].in_plan, Some(true));
+    assert_eq!(asked[1].in_plan, Some(false));
+    assert_eq!(asked[0].always, AlwaysOffer::Never);
+    assert_eq!(
+        outcome.digest.outbound_actions,
+        vec!["Send the report to example.com", "Post to the intranet"]
+    );
+    let audit = fixture.store.list_audit(None, None).unwrap();
+    assert_eq!(audit[0].detail["in_plan"], false);
+    assert_eq!(audit[1].detail["in_plan"], true);
+}
+
+/// An engine with no modes, or none matching the hints, still gets the
+/// plan gate: nothing is switched, nothing fails.
+#[tokio::test]
+async fn an_engine_without_matching_modes_is_gated_all_the_same() {
+    let fixture = Fixture::new();
+    let report = fixture.path("report.txt");
+    let engine = TestEngine::with_modes(
+        vec![
+            vec![Act::Ask(edit_of(&report)), Act::Text(PLAN_REPLY)],
+            vec![Act::Write("report.txt", "FY26\n")],
+        ],
+        &["yolo"],
+        "yolo",
+    );
+    fixture
+        .seen
+        .will_answer_plan(Some(Approval::Approved { edits: None }));
+    let runner = fixture
+        .runner_with(
+            Arc::clone(&engine),
+            Decision::RejectOnce,
+            &planning_facts(),
+            &ConnectorRegistry::default(),
+        )
+        .await;
+
+    let outcome = runner
+        .run_turn_in(TurnMode::Plan, "Rename the year")
+        .await
+        .unwrap();
+
+    assert_eq!(outcome.turn.phase, TurnPhase::Done);
+    assert!(
+        engine.modes_set().is_empty(),
+        "the session opened in the only mode there is"
+    );
+    assert_eq!(engine.answers()[0].1, Decision::RejectOnce, "gated anyway");
+    assert_eq!(outcome.digest.files_changed, vec!["report.txt"]);
+}
+
+/// Direct mode is the execute phase alone: one prompt, with the request
+/// where the plan goes (§5), and no plan on the turn.
+#[tokio::test]
+async fn direct_mode_sends_only_the_execute_prompt() {
+    let fixture = Fixture::new();
+    let engine = TestEngine::new(vec![vec![Act::Text("Done.")]]);
+    let runner = fixture
+        .runner(Arc::clone(&engine), Decision::RejectOnce)
+        .await;
+
+    let outcome = runner.run_turn("Tidy the folder").await.unwrap();
+
+    let prompts = engine.prompts();
+    assert_eq!(prompts.len(), 1);
+    assert!(
+        prompts[0].contains("approved this plan:\nTidy the folder\n"),
+        "{}",
+        prompts[0]
+    );
+    assert!(outcome.turn.plan.is_none());
+    assert!(fixture.seen.reviewed().is_empty());
+    assert!(
+        engine.writes_allowed().is_empty(),
+        "direct mode never closes the gate"
+    );
 }
 
 // ---- going back ------------------------------------------------------------
