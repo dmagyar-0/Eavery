@@ -14,6 +14,7 @@ import { t } from "./vocab/t";
 import type {
   Checkpoint,
   Diagnostics,
+  DocumentTree,
   EngineListing,
   EngineStatus,
   JournalInfo,
@@ -56,6 +57,8 @@ export type State = {
   checkpoints: Checkpoint[];
   /** What Undo does not cover in this Project, and why. */
   unprotected: Unprotected[];
+  /** The Project folder, for the Documents pane. Null until it has been read. */
+  documents: DocumentTree | null;
   /** Where the Project's history is and how big it has got. Developer mode shows it. */
   journal: JournalInfo | null;
   /** Journal descriptions for the Home screen, by Project id. Developer mode only. */
@@ -86,6 +89,7 @@ const initial: State = {
   turns: [],
   checkpoints: [],
   unprotected: [],
+  documents: null,
   journal: null,
   journals: {},
   redo: null,
@@ -169,6 +173,7 @@ function react(event: StoredEvent) {
       void refreshCheckpoints();
       void refreshTurns();
       void refreshProtection();
+      void refreshDocuments();
       break;
     case "permission_requested":
       set({ asking: [...state.asking, core.request] });
@@ -266,6 +271,7 @@ export async function selectProject(projectId: string) {
     turns: [],
     checkpoints: [],
     unprotected: [],
+    documents: null,
     journal: null,
     redo: null,
     turnId: null,
@@ -287,7 +293,7 @@ export async function selectProject(projectId: string) {
       set({ sessionId: session.id });
       await Promise.all([feed.watch(session.id), refreshTurns()]);
     }
-    await refreshProtection();
+    await Promise.all([refreshProtection(), refreshDocuments()]);
   } catch (error) {
     stumbled(error);
   }
@@ -310,6 +316,7 @@ export async function forgetProject(projectId: string) {
             turns: [],
             checkpoints: [],
             unprotected: [],
+            documents: null,
             journal: null,
             redo: null,
           }
@@ -359,13 +366,45 @@ async function refreshProtection() {
   }
 }
 
+/**
+ * The Project folder, for the Documents pane. Read when the Project opens and
+ * again when a turn ends, because a turn is the thing that adds and removes
+ * files.
+ *
+ * A folder that cannot be read is not worth the error banner: the pane says
+ * what it knows, and the rest of the window carries on.
+ */
+async function refreshDocuments() {
+  const projectId = state.projectId;
+  if (!projectId) return;
+  try {
+    const documents = await ipc.listDocuments(projectId);
+    if (state.projectId !== projectId) return;
+    set({ documents });
+  } catch (error) {
+    console.error("the Project folder could not be read", error);
+  }
+}
+
 // ---- turns -----------------------------------------------------------------
 
 /** Plan first: the assistant says what it would do, and nothing runs until the plan is approved. */
 export const plan = (request: string) => startTurn(request, "plan");
 
-/** Straight to work, no plan: Developer mode's "Run", and Everyday's questions. */
-export const ask = (request: string) => startTurn(request, "direct");
+/**
+ * A question: the assistant reads and answers, and is not allowed to change
+ * anything (`06-plan-gate-permissions.md` §5). This is what Everyday's second
+ * button does, and it is deliberately not `run`: somebody who types a
+ * question has not asked for their documents to be edited.
+ */
+export const ask = (request: string) => startTurn(request, "ask");
+
+/**
+ * Straight to work, no plan: Developer mode's "Run". Writes are open and the
+ * policy is all that stands in front of them, which is why the button only
+ * exists in the mode that says so.
+ */
+export const run = (request: string) => startTurn(request, "direct");
 
 async function startTurn(request: string, mode: ipc.TurnMode) {
   if (!state.projectId) return;
@@ -494,7 +533,8 @@ export async function goBackTo(checkpointId: string) {
         },
       });
     }
-    await refreshProtection();
+    // Going back adds and removes files, so the pane has to be told.
+    await Promise.all([refreshProtection(), refreshDocuments()]);
   } catch (error) {
     stumbled(error);
   }

@@ -7,15 +7,19 @@
 // the answer is on the plan card, not here.
 
 import { useState, type KeyboardEvent } from "react";
-import { ask, plan, stop, useStore } from "../store";
+import { ask, plan, run, stop, useStore } from "../store";
 import { latestActivity, blocksFor } from "../transcript";
 import { useT } from "../vocab/useT";
 import { describeCall } from "./ToolCallRow";
 import { permissionTitle } from "./PermissionDialog";
 
 export function Composer() {
-  const { turnId, transcript, turns, projectId, reviewing } = useStore();
+  const { turnId, transcript, turns, projectId, reviewing, settings } = useStore();
   const t = useT();
+  // The second button is not the same button in both modes. Everyday's is a
+  // question, which may not change anything; Developer's is "Run", which
+  // may, and is only offered where the words say what that means (§5).
+  const second = settings.mode === "developer" ? run : ask;
   const [text, setText] = useState("");
   const running = turnId !== null;
   const waiting = reviewing !== null;
@@ -69,7 +73,7 @@ export function Composer() {
           type="button"
           disabled={running || !text.trim()}
           title={t("askDirectHint")}
-          onClick={() => send(ask)}
+          onClick={() => send(second)}
         >
           {t("askDirect")}
         </button>

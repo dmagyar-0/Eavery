@@ -322,13 +322,36 @@ Pass/fail lines are in `01-implementation-plan.md` §4. Code lives in
 
 ## M5 — Everyday mode
 
-- [ ] **M5-T01 (M)** `vocab/dictionary.ts` complete per `07-ui-vocabulary.md` §2; `t()` with variables; mode toggle persisted.
-- [ ] **M5-T02 (S)** `scripts/check-vocab.mjs` (string literals and JSX text only, parsed, not grepped) and CI step.
-- [ ] **M5-T03 (M)** Everyday renderings: `ToolCallRow` one-liners, thoughts hidden, `Digest` component, error-as-next-action.
-- [ ] **M5-T04 (M)** `DocumentsPane` with changed-file markers and OS open.
-- [ ] **M5-T05 (S)** "Ask a question" direct mode with read-only intent.
-- [ ] **M5-T06 (M)** Copy pass: every string in the app reviewed against the UI rules; no protocol words in Everyday mode.
-- [ ] **M5-T07 (S)** M5 exit test (text-file task, implementer-run, Everyday mode end to end) recorded below.
+- [x] **M5-T01 (M)** `527ffd8` — `vocab/dictionary.ts` complete per
+  `07-ui-vocabulary.md` §2 (all 36 keys, and 160 more the screens needed);
+  `t(mode, key, vars)` with `{name}` variables; the mode toggle persisted
+  through `set_settings` into SQLite. Most of this landed with M3-T05 to
+  M3-T08, which is why the dictionary was already close.
+- [x] **M5-T02 (S)** `527ffd8` — `scripts/check-vocab.mjs`, parsed with the
+  TypeScript compiler rather than grepped: string literals, template literals
+  and JSX text under `src/screens`, `src/components` and `App.tsx`, skipping
+  module specifiers and `className`. Run in CI on Linux (`pnpm check-vocab`).
+  It also checks the dictionary's own `everyday:` renderings, including the
+  `same(...)` ones — see `CHANGELOG-plan.md`.
+- [x] **M5-T03 (M)** `527ffd8` — Everyday renderings: `ToolCallRow`
+  one-liners with no tool names, thoughts hidden by a `null` dictionary
+  entry, the `Digest` component, and errors rendered as their next action.
+- [x] **M5-T04 (M)** `527ffd8` — `eavery-core::documents` plus the
+  `list_documents` command, and `DocumentsPane` as a tree: folders open to
+  depth 2 and wherever the last run touched something, `+`/`•`/`−` markers
+  from the last digest, click to open with the OS. Names and paths only; no
+  file contents are ever read.
+- [x] **M5-T05 (S)** `527ffd8` — `TurnMode::Ask`: one prompt, writes shut at
+  the engine, its read-only mode selected, and the plan gate answering every
+  permission request. Everyday's second button is this; Developer's "Run"
+  stays `Direct`. `eavery-cli prompt --ask` drives it too.
+- [x] **M5-T06 (M)** `527ffd8` — Copy pass over every string, enforced from
+  now on by the Everyday half of the vocabulary check. One real defect fixed:
+  an error with no `next_action` rendered as "That didn't work. " with a
+  dangling space and nothing to do about it.
+- [ ] **M5-T07 (S)** M5 exit test (text-file task, implementer-run, Everyday
+  mode end to end) recorded below. Needs a real engine and a person at the
+  window, so it is open like the other exit tests.
 
 **M5 exit recorded:** ______
 

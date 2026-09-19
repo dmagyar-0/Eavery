@@ -108,6 +108,43 @@ outbound_actions: Array<string>, refused_actions: Array<string>,
 undo_to: string | null, };
 
 /**
+ * One file or folder in the Documents pane.
+ */
+export type DocumentNode = { 
+/**
+ * What it is called. The last component of `path`.
+ */
+name: string, 
+/**
+ * Relative to the Project root, with `/` separators on every platform so
+ * that it compares equal to the paths in a [`crate::event::Digest`].
+ */
+path: string, directory: boolean, 
+/**
+ * Size in bytes. Zero for a folder, and zero for a file whose size could
+ * not be read — this is a label, not an accounting.
+ */
+bytes: bigint, 
+/**
+ * Empty for a file, and for a folder the walk stopped at.
+ */
+children: Array<DocumentNode>, };
+
+/**
+ * A Project folder, as far as the pane is told about it.
+ */
+export type DocumentTree = { entries: Array<DocumentNode>, 
+/**
+ * How many files the listing carries — folders are not counted.
+ */
+files: number, 
+/**
+ * True when the folder holds more than the listing shows, because it hit
+ * [`MAX_ENTRIES`] or [`MAX_DEPTH`].
+ */
+truncated: boolean, };
+
+/**
  * What an engine reported about itself at `initialize`
  * (`docs/plan/04-acp-engines.md` §1).
  */
@@ -349,6 +386,11 @@ export type Turn = { id: string, session_id: string,
  * What the user typed.
  */
 request: string, phase: TurnPhase, plan: Plan | null, pre_checkpoint: string | null, post_checkpoint: string | null, started_at: string, };
+
+/**
+ * Which loop a turn runs (§1, §5).
+ */
+export type TurnMode = "direct" | "plan" | "ask";
 
 /**
  * Where a [`Turn`] is in the plan → approve → execute loop

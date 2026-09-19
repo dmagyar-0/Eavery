@@ -1,12 +1,14 @@
 //! The turn state machine: what happens between a person asking for something
 //! and their folder being different.
 //!
-//! Two loops share it (`docs/plan/06-plan-gate-permissions.md` §1 and §5).
+//! Three loops share it (`docs/plan/06-plan-gate-permissions.md` §1 and §5).
 //! The plan loop is the default: the engine runs twice, once to look and say
 //! what it would do, once — after the person has said yes — to do it. Direct
 //! mode sends only the second prompt, with the request where the plan would
-//! go. Both are bracketed by checkpoints, and both answer the engine's
-//! permission requests from the same policy.
+//! go. A question sends one prompt with writes held shut and the plan gate
+//! answering, and never reaches an execute phase at all. All three are
+//! bracketed by checkpoints, and all three answer the engine's permission
+//! requests from the same policy.
 //!
 //! ```text
 //! request
@@ -24,6 +26,10 @@
 //!    ▼
 //! Executing ── execute prompt; permission handler: reversible goes
 //!    │         through, the rest is asked
+//!    ▼
+//! (a question skips all of the above but the checkpoints: one prompt,
+//!  writes shut, the gate refusing every mutation, then the digest — which
+//!  is expected to be empty, and says so when it is not)
 //!    ▼
 //! [post-turn checkpoint] ── taken whatever happened, so a cancelled or
 //!    │                      crashed turn is still undoable
@@ -97,12 +103,31 @@ pub type ApprovalHandler =
 #[serde(rename_all = "snake_case")]
 pub enum TurnMode {
     /// Only the execute prompt, with the request where the plan would go.
-    /// Allowed when the Project skips planning (Developer mode) or the
-    /// request is a question (Everyday's "Ask"). The policy still applies.
+    /// Allowed when the Project skips planning (Developer mode). The policy
+    /// still applies.
     #[default]
     Direct,
     /// Plan, approve, execute.
     Plan,
+    /// A question (Everyday's "Ask a question"): one prompt, with writes held
+    /// shut for the whole of it, so the answer costs the person nothing but
+    /// the reading (§5, `read_only_intent`).
+    ///
+    /// This is not `Direct` with a different prompt. Direct mode may write —
+    /// that is what it is for — and a question that quietly edited a
+    /// document would be the worst thing Eavery could do, because nobody
+    /// asked it to change anything and nobody is watching a plan. So the gate
+    /// that guards the plan phase guards this too, and the engine is put in
+    /// its read-only mode on top: two answers to the same question, because
+    /// an engine that ignores the mode still meets the gate.
+    Ask,
+}
+
+impl TurnMode {
+    /// Whether this mode may change anything. A question may not.
+    pub fn writes(self) -> bool {
+        !matches!(self, TurnMode::Ask)
+    }
 }
 
 /// What the person is shown when a plan is ready.
@@ -269,12 +294,30 @@ impl Busy {
     }
 }
 
-/// Which prompt is in flight, for the event pump: only the plan phase watches
-/// for an engine that changed something without asking.
+/// Which prompt is in flight, for the event pump: the phases that allow no
+/// writes watch for an engine that changed something without asking.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Phase {
     Planning,
+    Asking,
     Executing,
+}
+
+impl Phase {
+    /// The word the audit row carries for a decision made in this phase.
+    fn as_str(self) -> &'static str {
+        match self {
+            Phase::Planning => "planning",
+            Phase::Asking => "asking",
+            Phase::Executing => "executing",
+        }
+    }
+
+    /// Whether a mutation reaching `completed` here means the engine went
+    /// round the gate. True wherever writes are shut.
+    fn watches_for_bypass(self) -> bool {
+        matches!(self, Phase::Planning | Phase::Asking)
+    }
 }
 
 /// How a turn ended, before it is written down.
@@ -540,7 +583,10 @@ impl ProjectRunner {
             request: request.to_owned(),
             phase: match mode {
                 TurnMode::Plan => TurnPhase::Planning,
-                TurnMode::Direct => TurnPhase::Executing,
+                // A question never reaches an execute phase, but it is
+                // working from the moment it is asked, and `Executing` is
+                // the phase the UI reads as "working on it".
+                TurnMode::Direct | TurnMode::Ask => TurnPhase::Executing,
             },
             plan: None,
             pre_checkpoint: None,
@@ -578,9 +624,36 @@ impl ProjectRunner {
         let ending = match mode {
             TurnMode::Direct => self.execute(&mut turn, None, &log).await,
             TurnMode::Plan => self.plan_then_execute(&mut turn, &log).await,
+            TurnMode::Ask => self.answer(&mut turn, &log).await,
         };
 
         self.finish(turn, &pre, ending, &log).await
+    }
+
+    /// A question (§5): one prompt, nothing changed.
+    ///
+    /// The same three locks the plan phase uses, for the same reason —
+    /// writes shut at the engine, the engine's read-only mode selected, and
+    /// the gate answering every permission request — because "read-only
+    /// intent" that rests on the prompt alone is a wish, not a guarantee.
+    /// Unlike the plan phase there is no second phase to open writes for, so
+    /// they are opened again on the way out and nothing else runs in between.
+    async fn answer(&self, turn: &mut Turn, log: &Arc<Mutex<TurnLog>>) -> Ending {
+        let turn_id = turn.id;
+
+        self.engine.set_writes_allowed(false).await;
+        self.switch_mode(self.plan_mode.as_deref()).await;
+        let handler = self.gate_handler(turn_id, Arc::clone(log), Phase::Asking);
+        let prompt = prompts::ask_prompt(&self.root_text(), &turn.request);
+        let (stop, _reply) = self
+            .prompt(turn_id, &prompt, handler, Phase::Asking, log)
+            .await;
+        self.engine.set_writes_allowed(true).await;
+
+        match stop {
+            Ok(reason) => Ending::Stopped(reason),
+            Err(error) => Ending::Failed(error),
+        }
     }
 
     /// The plan phase, the wait, and — given a yes — the execute phase
@@ -593,7 +666,7 @@ impl ProjectRunner {
         // stop the next direct turn from writing anything.
         self.engine.set_writes_allowed(false).await;
         self.switch_mode(self.plan_mode.as_deref()).await;
-        let handler = self.gate_handler(turn_id, Arc::clone(log));
+        let handler = self.gate_handler(turn_id, Arc::clone(log), Phase::Planning);
         let prompt = prompts::plan_prompt(&self.root_text(), &turn.request, &[]);
         let (stop, reply) = self
             .prompt(turn_id, &prompt, handler, Phase::Planning, log)
@@ -792,12 +865,13 @@ impl ProjectRunner {
                 let Some(event) = self.core_event(turn_id, raw, &mut calls) else {
                     continue;
                 };
-                let bypass = match (&event, phase) {
-                    (
-                        CoreEvent::ToolCallStarted { call, .. }
-                        | CoreEvent::ToolCallUpdated { call, .. },
-                        Phase::Planning,
-                    ) => self.bypass_of(call, log, &mut reported),
+                let bypass = match &event {
+                    CoreEvent::ToolCallStarted { call, .. }
+                    | CoreEvent::ToolCallUpdated { call, .. }
+                        if phase.watches_for_bypass() =>
+                    {
+                        self.bypass_of(call, log, &mut reported)
+                    }
                     _ => None,
                 };
                 self.recorder.emit_or_log(event);
@@ -1053,8 +1127,14 @@ impl ProjectRunner {
         })
     }
 
-    /// The plan phase's handler: the client-side gate (§2.2).
-    fn gate_handler(&self, turn_id: TurnId, log: Arc<Mutex<TurnLog>>) -> PermissionHandler {
+    /// The handler for the phases that may not write: the client-side gate
+    /// (§2.2). `phase` is what the audit row will say the refusal was for.
+    fn gate_handler(
+        &self,
+        turn_id: TurnId,
+        log: Arc<Mutex<TurnLog>>,
+        phase: Phase,
+    ) -> PermissionHandler {
         let gate = Arc::new(Gatekeeper {
             recorder: Arc::clone(&self.recorder),
             root: self.journal.root().to_path_buf(),
@@ -1062,6 +1142,7 @@ impl ProjectRunner {
             exit_signatures: self.facts.plan_exit_signatures.clone(),
             log,
             turn_id,
+            phase,
         });
         Arc::new(move |request: PermissionView| {
             let gate = Arc::clone(&gate);
@@ -1463,6 +1544,8 @@ struct Gatekeeper {
     exit_signatures: Vec<String>,
     log: Arc<Mutex<TurnLog>>,
     turn_id: TurnId,
+    /// Which write-shut phase this is, for the audit row.
+    phase: Phase,
 }
 
 impl Gatekeeper {
@@ -1506,7 +1589,7 @@ impl Gatekeeper {
                 .for_turn(self.turn_id)
                 .with_risk(risk)
                 .with_detail(serde_json::json!({
-                    "phase": "planning",
+                    "phase": self.phase.as_str(),
                     "tool_call_id": request.tool_call_id,
                     "title": request.title,
                     "kind": request.kind,

@@ -14,6 +14,7 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use eavery_core::diagnostics::Diagnostics;
+use eavery_core::documents::DocumentTree;
 use eavery_core::engine::McpServerSpec;
 use eavery_core::error::AppError;
 use eavery_core::event::CoreEvent;
@@ -22,7 +23,7 @@ use eavery_core::model::{
     Checkpoint, EngineListing, EngineStatus, Project, Session, Settings, Turn,
 };
 use eavery_core::store::{AuditEntry, StoredEvent};
-use eavery_core::turn::RestoreOutcome;
+use eavery_core::turn::{RestoreOutcome, TurnMode};
 use ts_rs::{Config, TS, TypeVisitor};
 
 /// Everything the frontend is handed. Their dependencies come along on their
@@ -43,9 +44,11 @@ fn roots(collect: &mut Collect) {
     collect.visit::<EngineListing>();
     collect.visit::<Settings>();
     collect.visit::<RestoreOutcome>();
+    collect.visit::<TurnMode>();
     collect.visit::<AppError>();
     collect.visit::<JournalInfo>();
     collect.visit::<Diagnostics>();
+    collect.visit::<DocumentTree>();
 }
 
 const HEADER: &str = "\

@@ -9,6 +9,7 @@
 //! so a failure reaches the person as something to do about it.
 
 use eavery_core::diagnostics::{self, Diagnostics};
+use eavery_core::documents::{self, DocumentTree};
 use eavery_core::error::AppError;
 use eavery_core::event::{Decision, ErrorCode};
 use eavery_core::journal::{self, ChangeSet, JournalInfo, Unprotected};
@@ -171,10 +172,11 @@ pub async fn run_health_check(
 /// Starts a turn and returns as soon as it has an id; the turn goes on in a
 /// task of its own and reports itself through `core://event`.
 ///
-/// `mode` is `plan` (the plan gate: plan, approve, execute) or `direct`
-/// (`docs/plan/06-plan-gate-permissions.md` §1 and §5); left out, it is
-/// direct. A plan-mode turn stops at `AwaitingApproval` and waits for
-/// [`approve_plan`] or [`reject_plan`].
+/// `mode` is `plan` (the plan gate: plan, approve, execute), `direct` (the
+/// execute prompt alone), or `ask` (a question: one prompt, writes held shut
+/// for all of it) — `docs/plan/06-plan-gate-permissions.md` §1 and §5. Left
+/// out, it is direct. A plan-mode turn stops at `AwaitingApproval` and waits
+/// for [`approve_plan`] or [`reject_plan`].
 ///
 /// The Project is claimed before this returns, so "the assistant is already
 /// working" is the answer to this call rather than an error arriving from
@@ -371,6 +373,23 @@ pub async fn journal_info(
     Ok(tokio::task::spawn_blocking(move || journal.info())
         .await
         .map_err(|error| AppError::internal(format!("measuring the history: {error}")))??)
+}
+
+/// The Project folder, for the Documents pane: names, relative paths and
+/// sizes, and no contents (`07-ui-vocabulary.md` §3).
+///
+/// Walking a folder is blocking work, and on a synced folder it can be slow
+/// work, so it goes to the blocking pool like every other walk here.
+#[tauri::command]
+pub async fn list_documents(
+    core: State<'_, AppCore>,
+    project_id: ProjectId,
+) -> Result<DocumentTree, AppError> {
+    let journal = core.journal(project_id).await?;
+    let root = journal.root().to_path_buf();
+    Ok(tokio::task::spawn_blocking(move || documents::list(&root))
+        .await
+        .map_err(|error| AppError::internal(format!("reading the folder: {error}")))??)
 }
 
 /// Everything in the Project that Undo does not cover, and why. This is what

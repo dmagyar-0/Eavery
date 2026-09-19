@@ -439,3 +439,51 @@ fn diagnostics_answer_before_there_is_a_log() {
     let diagnostics = fixture.ok("diagnostics", json!({ "lines": 2 }));
     assert_eq!(diagnostics["log_tail"], json!(["line 4", "line 5"]));
 }
+
+/// The Documents pane's listing: the folder as names and paths, with the
+/// folders the Journal ignores left out of it (M5-T04).
+#[test]
+fn the_project_folder_is_listed_for_the_documents_pane() {
+    let fixture = Fixture::new();
+    let root = fixture.project_folder();
+    std::fs::create_dir_all(Path::new(&root).join("reports/2026")).unwrap();
+    std::fs::write(Path::new(&root).join("reports/2026/q1.txt"), "Q1\n").unwrap();
+    std::fs::create_dir_all(Path::new(&root).join("node_modules/left-pad")).unwrap();
+    std::fs::write(
+        Path::new(&root).join("node_modules/left-pad/index.js"),
+        "x\n",
+    )
+    .unwrap();
+
+    let project_id = fixture.ok("open_project", json!({ "path": root }))["id"].clone();
+    let tree = fixture.ok("list_documents", json!({ "projectId": project_id }));
+
+    let entries = tree["entries"].as_array().unwrap();
+    let names: Vec<&str> = entries
+        .iter()
+        .map(|node| node["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        names,
+        vec!["reports", "report.txt"],
+        "folders first, and node_modules is not a document"
+    );
+    assert_eq!(tree["truncated"], false);
+    assert_eq!(tree["files"], 2);
+
+    // A nested file carries the path the digest would name it by, so the
+    // pane can mark it as changed by comparing the two.
+    let buried = &entries[0]["children"][0]["children"][0];
+    assert_eq!(buried["path"], "reports/2026/q1.txt");
+    assert_eq!(buried["directory"], false);
+}
+
+#[test]
+fn listing_the_folder_of_a_project_that_is_not_open_is_an_error() {
+    let fixture = Fixture::new();
+    let error = fixture.err(
+        "list_documents",
+        json!({ "projectId": uuid::Uuid::new_v4().to_string() }),
+    );
+    assert_is_app_error(&error);
+}

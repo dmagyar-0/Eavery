@@ -142,6 +142,8 @@ pub async fn run(data_dir: &Path, args: &RunArgs) -> Result<ExitCode> {
     // order it happened, including the permission questions and the plan.
     let mode = if args.plan {
         TurnMode::Plan
+    } else if args.ask {
+        TurnMode::Ask
     } else {
         TurnMode::Direct
     };

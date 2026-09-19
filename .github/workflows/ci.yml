@@ -50,6 +50,13 @@ jobs:
         run: |
           pnpm install --frozen-lockfile
           pnpm build
+      # The words a non-technical person must never see live in `vocab/` and
+      # nowhere else (`docs/plan/07-ui-vocabulary.md` §2). Run on one OS: it
+      # parses the same files to the same answer on all three.
+      - name: Check the screens against the dictionary
+        if: runner.os == 'Linux'
+        working-directory: apps/desktop
+        run: pnpm check-vocab
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace --no-run
