@@ -19,7 +19,7 @@ use eavery_core::event::{Decision, ErrorCode, PermissionView};
 use eavery_core::journal::{Journal, Watch};
 use eavery_core::model::{Project, ProjectId, Settings, TurnId};
 use eavery_core::store::{Store, StoredEvent};
-use eavery_core::turn::{Observer, ProjectRunner, TurnCallbacks};
+use eavery_core::turn::{Approval, Observer, PlanReview, ProjectRunner, TurnCallbacks};
 use eavery_engines::health::{HealthCache, HealthOptions};
 use eavery_engines::{EngineSpec, Resolver};
 use tauri::{AppHandle, Emitter};
@@ -48,6 +48,7 @@ pub struct AppCore {
     resolver: Resolver,
     events: broadcast::Sender<StoredEvent>,
     permissions: Arc<PermissionDesk>,
+    plans: Arc<PlanDesk>,
     window: Option<AppHandle>,
 }
 
@@ -65,6 +66,7 @@ impl AppCore {
             resolver: Resolver::current(),
             events,
             permissions: Arc::new(PermissionDesk::default()),
+            plans: Arc::new(PlanDesk::default()),
             window,
         })
     }
@@ -83,6 +85,12 @@ impl AppCore {
 
     pub fn permissions(&self) -> &PermissionDesk {
         &self.permissions
+    }
+
+    /// The plans waiting for an answer. An `Arc`, so a test can play the
+    /// turn engine's part with [`PlanDesk::handler`].
+    pub fn plans(&self) -> &Arc<PlanDesk> {
+        &self.plans
     }
 
     /// Watches the event stream from inside the process. The window gets the
@@ -182,6 +190,7 @@ impl AppCore {
                 journal,
                 engine,
                 spec.id,
+                &spec.facts(),
                 // Connectors arrive with M6-T08.
                 &eavery_core::policy::ConnectorRegistry::default(),
                 self.callbacks(),
@@ -243,12 +252,13 @@ impl AppCore {
         Ok(())
     }
 
-    /// How a turn reaches the window: every event, and the questions only a
-    /// person can answer.
+    /// How a turn reaches the window: every event, the questions only a
+    /// person can answer, and the plan they have to say yes to.
     fn callbacks(&self) -> TurnCallbacks {
         TurnCallbacks {
             events: self.observer(),
             permission: self.permissions.handler(),
+            approval: self.plans.handler(),
         }
     }
 
@@ -337,6 +347,76 @@ impl PermissionDesk {
 
     /// How many requests are waiting. The composer shows this; the tests
     /// assert on it.
+    pub fn waiting(&self) -> usize {
+        self.waiting
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .len()
+    }
+}
+
+/// The plans waiting for an answer, keyed by turn.
+///
+/// The same shape as [`PermissionDesk`], for the same reason: the turn
+/// engine holds the plan phase open until a person answers, and the window
+/// answers through a command (`approve_plan`, `reject_plan`) rather than a
+/// callback it holds. Nothing here ever answers yes on anyone's behalf: a
+/// window that goes away is a no.
+#[derive(Default)]
+pub struct PlanDesk {
+    waiting: Mutex<HashMap<TurnId, oneshot::Sender<Approval>>>,
+}
+
+impl PlanDesk {
+    pub fn handler(self: &Arc<Self>) -> eavery_core::turn::ApprovalHandler {
+        let desk = Arc::clone(self);
+        Arc::new(move |review: PlanReview| {
+            let desk = Arc::clone(&desk);
+            Box::pin(async move { desk.ask(review).await })
+        })
+    }
+
+    async fn ask(&self, review: PlanReview) -> Approval {
+        let (answer, answered) = oneshot::channel();
+        self.waiting
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .insert(review.turn_id, answer);
+
+        let approval = match answered.await {
+            Ok(approval) => approval,
+            Err(_) => Approval::Rejected,
+        };
+        // Whether it was answered or the wait was abandoned (Stop, or the
+        // window going away), the turn is no longer waiting.
+        self.waiting
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .remove(&review.turn_id);
+        approval
+    }
+
+    /// Answers a waiting plan. A turn with no plan waiting is an error worth
+    /// reporting: the window and the core disagree about where the turn is.
+    pub fn answer(&self, turn_id: TurnId, approval: Approval) -> Result<(), AppError> {
+        let sender = self
+            .waiting
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .remove(&turn_id);
+
+        match sender {
+            Some(sender) => sender
+                .send(approval)
+                .map_err(|_| AppError::internal("that plan is no longer waiting for an answer")),
+            None => Err(AppError::new(
+                ErrorCode::Internal,
+                "that turn has no plan waiting for an answer",
+            )),
+        }
+    }
+
+    /// How many plans are waiting.
     pub fn waiting(&self) -> usize {
         self.waiting
             .lock()

@@ -41,6 +41,8 @@ pub fn register<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder
         commands::list_engines,
         commands::run_health_check,
         commands::start_turn,
+        commands::approve_plan,
+        commands::reject_plan,
         commands::answer_permission,
         commands::cancel_turn,
         commands::list_turns,

@@ -262,24 +262,79 @@ fn going_back_to_a_checkpoint_that_does_not_exist_says_so() {
     assert_eq!(error["code"], "restore_failed");
 }
 
-/// The plan gate is M4. Until it is built, asking for it is refused rather
-/// than silently run as a direct turn: a plan that never happened must not
-/// look like one that was approved.
+/// Approval only ever comes through `approve_plan` / `reject_plan`, and an
+/// answer to a plan nobody is waiting on means the window and the core
+/// disagree about where the turn is — reported, never swallowed, and never
+/// turned into a yes for some other turn.
 #[test]
-fn asking_for_a_plan_is_refused_until_the_plan_gate_exists() {
+fn answering_a_plan_nobody_is_waiting_on_is_an_error() {
     let fixture = Fixture::new();
-    let root = fixture.project_folder();
-    let project_id = fixture.ok("open_project", json!({ "path": root }))["id"].clone();
+    let turn_id = uuid::Uuid::new_v4();
 
     let error = fixture.err(
-        "start_turn",
-        json!({ "projectId": project_id, "request": "tidy up", "mode": "plan" }),
+        "approve_plan",
+        json!({ "turnId": turn_id, "edits": "skip the cover page" }),
     );
     assert_is_app_error(&error);
     assert!(
-        error["message"].as_str().unwrap().contains("planning"),
+        error["message"].as_str().unwrap().contains("plan"),
         "{error}"
     );
+    let error = fixture.err("reject_plan", json!({ "turnId": turn_id }));
+    assert_is_app_error(&error);
+    assert_eq!(fixture.app.state::<AppCore>().plans().waiting(), 0);
+}
+
+/// The plan desk, from the core's side: what a plan-mode turn hands it is
+/// what `approve_plan` answers, with the edits, and a second answer to the
+/// same plan is the error above rather than a second yes.
+#[test]
+fn a_plan_waiting_on_the_desk_is_answered_by_the_command() {
+    use eavery_core::turn::{Approval, PlanReview};
+
+    let fixture = Fixture::new();
+    let core = fixture.app.state::<AppCore>();
+    let turn_id = uuid::Uuid::new_v4();
+    let review = PlanReview {
+        turn_id,
+        plan: eavery_core::model::Plan {
+            summary: "Update the report".into(),
+            ..Default::default()
+        },
+        vendor: "local".into(),
+    };
+
+    // What the turn engine does: hand the plan to the desk and wait.
+    let waiting = {
+        let handler = core.plans().handler();
+        let review = review.clone();
+        std::thread::spawn(move || {
+            tauri::async_runtime::block_on(async move { handler(review).await })
+        })
+    };
+    // Until the wait is registered there is nothing to answer.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while core.plans().waiting() == 0 {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the desk never saw the plan"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+
+    fixture.ok(
+        "approve_plan",
+        json!({ "turnId": turn_id, "edits": "skip the cover page" }),
+    );
+    assert_eq!(
+        waiting.join().unwrap(),
+        Approval::Approved {
+            edits: Some("skip the cover page".into())
+        }
+    );
+    assert_eq!(core.plans().waiting(), 0);
+    let error = fixture.err("reject_plan", json!({ "turnId": turn_id }));
+    assert_is_app_error(&error);
 }
 
 /// An answer to a question nobody asked means the window and the engine

@@ -5,22 +5,21 @@ Rust, provider-neutral, with every action explained before it happens and
 reversible after.
 
 > Status: **M2 done bar its exit test against a real engine; M3's screens
-> are in; M4's policy, prompts, plan gate and plan parser are in, and the
-> two-phase turn that uses them is next.** The Rust workspace, the scriptable
-> ACP test agent, the ACP client, the engine table and health checks, the
-> git-backed Journal, the store, the turn engine and the headless CLI are in
-> and tested, and so is the desktop app: twenty-three commands, the event
-> stream, the generated types, and the window — Home, the three-pane Project
-> screen with the transcript, the permission dialog, the history with Undo and
+> are in; M4's plan gate is in bar its exit test against a real engine.**
+> The Rust workspace, the scriptable ACP test agent, the ACP client, the
+> engine table and health checks, the git-backed Journal, the store, the
+> two-phase turn engine and the headless CLI are in and tested, and so is
+> the desktop app: twenty-five commands, the event stream, the generated
+> types, and the window — Home, the three-pane Project screen with the
+> transcript, the plan card, the permission dialog, the history with Undo and
 > Redo, Settings with the mode toggle and the assistants, and a Diagnostics
 > panel over the log. From the window or a terminal you can open a folder,
-> ask an assistant to change it, see what changed, and undo it. The
-> permission policy now follows the full decision table, with "always"
-> remembered per Project where the table allows it. What is not there yet:
-> the plan → approve → execute turn and its plan card (M4-T05 onwards),
-> Everyday-mode copy throughout (M5), the Documents tree (M5), and onboarding
-> (M7). The plan lives in [`docs/plan/`](docs/plan/00-README.md) and the task
-> list with it.
+> ask an assistant what it would do, read the plan, say go, see what
+> changed, and undo it. During planning the assistant can only read; every
+> decision — the gate's, the policy's and yours — is on the record. What is
+> not there yet: Everyday-mode copy throughout (M5), the Documents tree (M5),
+> the document Connector and Playbooks (M6), and onboarding (M7). The plan
+> lives in [`docs/plan/`](docs/plan/00-README.md) and the task list with it.
 
 ## The thesis
 
@@ -71,6 +70,18 @@ cargo run -p eavery-cli -- run --project /tmp/project --engine fake \
 cargo run -p eavery-cli -- history --project /tmp/project
 cargo run -p eavery-cli -- diff --project /tmp/project <checkpoint>
 cargo run -p eavery-cli -- undo --project /tmp/project
+```
+
+With `--plan` the assistant says what it would do first and nothing runs
+until you say yes — the plan gate, `docs/plan/06-plan-gate-permissions.md`.
+The terminal asks; `--approve yes` (with `--edits "..."` for changes) or
+`--approve no` answers up front, and with no terminal attached the answer
+is no:
+
+```sh
+cargo run -p eavery-cli -- run --project /tmp/project --engine fake \
+  --script crates/eavery-core/tests/scripts/plan.json \
+  --plan "rename FY25 to FY26"
 ```
 
 Swap `--engine fake --script ...` for `--engine goose` (or whatever

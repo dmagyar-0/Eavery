@@ -511,6 +511,49 @@ select {
   margin-bottom: 0.25rem;
 }
 
+.row-plan {
+  padding: 0;
+}
+.plan-card {
+  background: var(--bg-pane);
+  border: 1px solid var(--accent);
+  border-radius: 0.6rem;
+  padding: 0.75rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.plan-card h3 {
+  margin: 0;
+}
+.plan-summary {
+  margin: 0;
+}
+.plan-steps {
+  margin: 0;
+  padding-left: 1.4rem;
+}
+.plan-section h4 {
+  margin: 0.2rem 0 0.1rem;
+  font-size: 0.85rem;
+  color: var(--fg-muted);
+}
+.plan-section ul,
+.plan-section p {
+  margin: 0;
+}
+.plan-answer {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--line);
+}
+.plan-answer textarea {
+  width: 100%;
+  resize: vertical;
+}
+
 /* ---- Composer ----------------------------------------------------------- */
 
 .composer {

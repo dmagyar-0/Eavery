@@ -14,7 +14,7 @@ use anyhow::{Context, Result, bail};
 use eavery_core::journal::{self, Journal, Watch};
 use eavery_core::model::{CheckpointId, Project, ProjectId};
 use eavery_core::store::Store;
-use eavery_core::turn::{self, ProjectRunner, TurnCallbacks};
+use eavery_core::turn::{self, ProjectRunner, TurnCallbacks, TurnMode};
 
 use crate::render;
 use crate::{RunArgs, println_flush};
@@ -120,20 +120,32 @@ pub async fn run(data_dir: &Path, args: &RunArgs) -> Result<ExitCode> {
         &project.root,
     )?));
 
+    let spec = eavery_engines::find(&args.engine)
+        .with_context(|| format!("there is no engine called {}", args.engine))?;
     let runner = ProjectRunner::open(
         Arc::new(store),
         journal,
         engine,
         &args.engine,
+        &spec.facts(),
         // Connectors arrive with M6-T08.
         &eavery_core::policy::ConnectorRegistry::default(),
-        callbacks(args.answer.clone()),
+        callbacks(
+            args.answer.clone(),
+            args.approve.clone(),
+            args.edits.clone(),
+        ),
     )
     .await?;
 
     // The turn prints itself: every event reaches the callback above in the
-    // order it happened, including the permission questions.
-    let outcome = runner.run_turn(&args.request).await;
+    // order it happened, including the permission questions and the plan.
+    let mode = if args.plan {
+        TurnMode::Plan
+    } else {
+        TurnMode::Direct
+    };
+    let outcome = runner.run_turn_in(mode, &args.request).await;
     runner.shutdown().await;
 
     match outcome {
@@ -331,8 +343,12 @@ fn last_pre_turn_checkpoint(store: &Store, project_id: &ProjectId) -> Result<Che
 }
 
 /// Prints the turn as it happens, and asks the terminal about anything the
-/// policy will not decide.
-fn callbacks(fixed: Option<String>) -> TurnCallbacks {
+/// policy will not decide — and about the plan.
+fn callbacks(
+    fixed: Option<String>,
+    approve: Option<String>,
+    edits: Option<String>,
+) -> TurnCallbacks {
     TurnCallbacks {
         // Called in order, from the task running the turn, so printing
         // straight out keeps the transcript in the order it happened.
@@ -344,6 +360,15 @@ fn callbacks(fixed: Option<String>) -> TurnCallbacks {
         permission: Arc::new(move |view| {
             let fixed = fixed.clone();
             Box::pin(async move { crate::answer_permission(&view, fixed.as_deref()).await })
+        }),
+        approval: Arc::new(move |_review| {
+            let approve = approve.clone();
+            let edits = edits.clone();
+            Box::pin(async move {
+                let answer = crate::answer_plan(approve.as_deref(), edits.as_deref()).await;
+                println_flush(render::plan_answered(&answer));
+                answer
+            })
         }),
     }
 }

@@ -9,7 +9,8 @@ use std::path::PathBuf;
 use eavery_core::engine::{EngineError, OpenedSession, RawAgentEvent, StopReason};
 use eavery_core::event::{CoreEvent, Decision, Digest, PermissionView};
 use eavery_core::journal::{ChangeSet, Unprotected, UnprotectedReason};
-use eavery_core::model::{Checkpoint, CheckpointKind, EngineInfo, EngineStatus, Project};
+use eavery_core::model::{Checkpoint, CheckpointKind, EngineInfo, EngineStatus, Plan, Project};
+use eavery_core::turn::Approval;
 use eavery_engines::discovery::LaunchVia;
 use eavery_engines::spec::EngineSpec;
 
@@ -287,7 +288,7 @@ pub fn core_event(event: &CoreEvent) -> Option<String> {
         CoreEvent::PermissionResolved { decision, by, .. } => {
             format!("answer   {decision:?} (by {by:?})")
         }
-        CoreEvent::PlanReady { plan, .. } => format!("plan     {}", plan.summary),
+        CoreEvent::PlanReady { plan, vendor, .. } => plan_lines(plan, vendor).join("\n"),
         CoreEvent::CheckpointCreated { checkpoint } => {
             format!("protect  {} {}", short(&checkpoint.id), checkpoint.label)
         }
@@ -314,6 +315,61 @@ pub fn core_event(event: &CoreEvent) -> Option<String> {
             None => format!("error    {message}"),
         },
     })
+}
+
+/// The plan, as the person is asked to approve it: the summary, the steps,
+/// and — always — what would leave the computer and what could not be
+/// undone, "nothing" when nothing.
+fn plan_lines(plan: &Plan, vendor: &str) -> Vec<String> {
+    let mut lines = vec![format!("plan     {}", plan.summary)];
+    for (index, step) in plan.steps.iter().enumerate() {
+        lines.push(format!("           {}. {}", index + 1, step.text));
+    }
+    let list = |lines: &mut Vec<String>, label: &str, items: &[String], none: &str| {
+        lines.push(match items {
+            [] => format!("{label:8} {none}"),
+            items => format!("{label:8} {}", items.join("; ")),
+        });
+    };
+    list(&mut lines, "files", &plan.files_touched, "none named");
+    list(
+        &mut lines,
+        "sends",
+        &plan.outbound,
+        "nothing leaves this computer",
+    );
+    list(
+        &mut lines,
+        "forever",
+        &plan.irreversible,
+        "nothing that cannot be undone",
+    );
+    if !plan.will_not_do.is_empty() {
+        list(&mut lines, "not", &plan.will_not_do, "");
+    }
+    if !vendor.is_empty() {
+        lines.push(format!("vendor   your documents are sent to {vendor}"));
+    }
+    if plan.steps.is_empty() && !plan.raw_markdown.trim().is_empty() {
+        // No structured block came back; the engine's own words are the plan.
+        lines.push(format!("raw      {}", indent(plan.raw_markdown.trim())));
+    }
+    lines
+}
+
+/// Nobody at the terminal to read the plan, so nothing runs.
+pub fn plan_unattended() -> String {
+    "approve  no terminal to ask on; the plan is not carried out. \
+     Use --approve yes to approve up front."
+        .to_owned()
+}
+
+pub fn plan_answered(answer: &Approval) -> String {
+    match answer {
+        Approval::Approved { edits: None } => "approve  yes".to_owned(),
+        Approval::Approved { edits: Some(edits) } => format!("approve  yes, with changes: {edits}"),
+        Approval::Rejected => "approve  no".to_owned(),
+    }
 }
 
 /// What the turn did. Always printed, including the empty lists: "nothing left

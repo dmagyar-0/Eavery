@@ -25,7 +25,10 @@ import type {
   Unprotected,
 } from "./types";
 
-/** Which loop a turn runs. `plan` is refused until the plan gate exists. */
+/**
+ * Which loop a turn runs (`06-plan-gate-permissions.md` §1 and §5): `plan`
+ * is plan → approve → execute; `direct` sends only the execute prompt.
+ */
 export type TurnMode = "direct" | "plan";
 
 /**
@@ -87,6 +90,18 @@ export const startTurn = (
   request: string,
   mode: TurnMode = "direct",
 ) => invoke<string>("start_turn", { projectId, request, mode });
+
+/**
+ * Go ahead with the plan a turn is waiting on, with `edits` when the person
+ * added any. This is the only way a plan is ever approved: nothing times out
+ * into a yes.
+ */
+export const approvePlan = (turnId: string, edits?: string) =>
+  invoke<void>("approve_plan", { turnId, edits });
+
+/** Not now. The turn ends without running anything. */
+export const rejectPlan = (turnId: string) =>
+  invoke<void>("reject_plan", { turnId });
 
 export const answerPermission = (requestId: string, decision: Decision) =>
   invoke<void>("answer_permission", { requestId, decision });

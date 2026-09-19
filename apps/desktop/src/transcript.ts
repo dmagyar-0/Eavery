@@ -41,7 +41,7 @@ export type Block = { key: string; at: string; turnId: string | null } & (
       decision: Decision | null;
       by: DecidedBy | null;
     }
-  | { kind: "plan"; plan: Plan }
+  | { kind: "plan"; plan: Plan; vendor: string }
   | { kind: "phase"; phase: TurnPhase }
   | { kind: "checkpoint"; checkpoint: Checkpoint }
   | { kind: "restored"; to: string; newCheckpoint: string; skippedLocked: string[] }
@@ -177,7 +177,7 @@ export function toBlocks(events: StoredEvent[], turns: Turn[]): Block[] {
       }
 
       case "plan_ready":
-        blocks.push({ ...base, key, kind: "plan", plan: event.plan });
+        blocks.push({ ...base, key, kind: "plan", plan: event.plan, vendor: event.vendor });
         break;
 
       case "phase_changed":

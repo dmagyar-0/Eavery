@@ -4,7 +4,7 @@
 //! it, whether it needs Node, which mode is its most restrictive — is a field
 //! here, so the rest of Eavery never branches on an engine id.
 
-use eavery_core::model::SessionMode;
+use eavery_core::engine::EngineFacts;
 
 use crate::instructions;
 
@@ -269,36 +269,30 @@ pub fn visible() -> impl Iterator<Item = &'static EngineSpec> {
     ENGINES.iter().filter(|spec| spec.visible())
 }
 
-/// The mode whose id matches `hint`, for [`EngineSpec::plan_mode_hint`] and
-/// [`EngineSpec::asking_mode_hint`].
-///
-/// Matching ignores case and treats `-`, `_` and spaces as the same character,
-/// because engines are not consistent about them and a hint that misses is a
-/// plan phase running in the engine's default mode. An exact id wins over a
-/// substring, so a hint of `plan` prefers `plan` to `planning`.
-pub fn pick_mode<'a>(modes: &'a [SessionMode], hint: Option<&str>) -> Option<&'a SessionMode> {
-    let hint = normalise(hint?);
-    modes
-        .iter()
-        .find(|mode| normalise(&mode.id) == hint)
-        .or_else(|| {
-            modes
-                .iter()
-                .find(|mode| normalise(&mode.id).contains(&hint))
-        })
-}
+pub use eavery_core::engine::pick_mode;
 
-fn normalise(value: &str) -> String {
-    value
-        .chars()
-        .filter(|c| !matches!(c, '-' | '_' | ' '))
-        .flat_map(char::to_lowercase)
-        .collect()
+impl EngineSpec {
+    /// What the turn engine needs to know about this engine beyond the
+    /// `Engine` trait: the vendor for the plan card, and the mode hints and
+    /// exit signatures the plan gate works from.
+    pub fn facts(&self) -> EngineFacts {
+        EngineFacts {
+            vendor: self.vendor.to_owned(),
+            plan_mode_hint: self.plan_mode_hint.map(str::to_owned),
+            asking_mode_hint: self.asking_mode_hint.map(str::to_owned),
+            plan_exit_signatures: self
+                .plan_exit_signatures
+                .iter()
+                .map(|signature| (*signature).to_owned())
+                .collect(),
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use eavery_core::model::SessionMode;
 
     fn mode(id: &str) -> SessionMode {
         SessionMode {

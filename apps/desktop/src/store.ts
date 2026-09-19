@@ -18,6 +18,7 @@ import type {
   EngineStatus,
   JournalInfo,
   PermissionView,
+  Plan,
   Project,
   Settings,
   StoredEvent,
@@ -37,6 +38,9 @@ export type Screen = "home" | "project" | "settings";
 
 /** What Redo would go back to: where the files were just before the last restore. */
 export type RedoPoint = { to: string; label: string };
+
+/** A plan waiting for the person's answer, and who saw their documents to make it. */
+export type PlanReview = { turnId: string; plan: Plan; vendor: string };
 
 export type State = {
   /** True until the first load finishes, so the window can say nothing rather than "no projects". */
@@ -63,6 +67,8 @@ export type State = {
   settings: Settings;
   /** The turn running right now, if any. Stop is the only thing to do while it is. */
   turnId: string | null;
+  /** The plan the running turn is waiting on, if it is (`AwaitingApproval`). */
+  reviewing: PlanReview | null;
   /** Questions waiting for an answer, oldest first: one dialog at a time. */
   asking: PermissionView[];
   /** The last thing that went wrong, as something to do about it. */
@@ -87,6 +93,7 @@ const initial: State = {
   checkingEngines: [],
   settings: { mode: "everyday", default_engine: null },
   turnId: null,
+  reviewing: null,
   asking: [],
   trouble: null,
   diagnostics: null,
@@ -145,11 +152,20 @@ function react(event: StoredEvent) {
   const core = event.event;
   switch (core.type) {
     case "turn_started":
-      set({ turnId: core.turn_id, redo: null });
+      set({ turnId: core.turn_id, redo: null, reviewing: null });
+      void refreshTurns();
+      break;
+    case "plan_ready":
+      set({ reviewing: { turnId: core.turn_id, plan: core.plan, vendor: core.vendor } });
+      void refreshTurns();
+      break;
+    case "phase_changed":
+      // The plan is answered once the turn moves on from waiting.
+      if (core.phase !== "awaiting_approval") set({ reviewing: null });
       void refreshTurns();
       break;
     case "turn_finished":
-      set({ turnId: null, asking: [] });
+      set({ turnId: null, asking: [], reviewing: null });
       void refreshCheckpoints();
       void refreshTurns();
       void refreshProtection();
@@ -169,7 +185,7 @@ function react(event: StoredEvent) {
       void refreshCheckpoints();
       break;
     case "engine_crashed":
-      set({ turnId: null, asking: [] });
+      set({ turnId: null, asking: [], reviewing: null });
       break;
     case "error":
       set({
@@ -253,6 +269,7 @@ export async function selectProject(projectId: string) {
     journal: null,
     redo: null,
     turnId: null,
+    reviewing: null,
     asking: [],
   });
 
@@ -344,10 +361,16 @@ async function refreshProtection() {
 
 // ---- turns -----------------------------------------------------------------
 
-export async function ask(request: string) {
+/** Plan first: the assistant says what it would do, and nothing runs until the plan is approved. */
+export const plan = (request: string) => startTurn(request, "plan");
+
+/** Straight to work, no plan: Developer mode's "Run", and Everyday's questions. */
+export const ask = (request: string) => startTurn(request, "direct");
+
+async function startTurn(request: string, mode: ipc.TurnMode) {
   if (!state.projectId) return;
   try {
-    const turnId = await ipc.startTurn(state.projectId, request);
+    const turnId = await ipc.startTurn(state.projectId, request, mode);
     set({ turnId, trouble: null });
 
     // The first turn is what starts a conversation, so the session to watch
@@ -369,6 +392,29 @@ export async function stop() {
   if (!state.turnId) return;
   try {
     await ipc.cancelTurn(state.turnId);
+  } catch (error) {
+    stumbled(error);
+  }
+}
+
+/** Go ahead with the plan on screen, with the person's changes if they wrote any. */
+export async function approvePlan(edits?: string) {
+  const review = state.reviewing;
+  if (!review) return;
+  const trimmed = edits?.trim();
+  try {
+    await ipc.approvePlan(review.turnId, trimmed ? trimmed : undefined);
+  } catch (error) {
+    stumbled(error);
+  }
+}
+
+/** Not now. The turn ends where it is and nothing is changed. */
+export async function rejectPlan() {
+  const review = state.reviewing;
+  if (!review) return;
+  try {
+    await ipc.rejectPlan(review.turnId);
   } catch (error) {
     stumbled(error);
   }

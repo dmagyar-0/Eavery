@@ -333,3 +333,161 @@ fn an_unattended_run_refuses_what_it_cannot_ask_about() {
         "{printed}"
     );
 }
+
+/// The plan gate, over real ACP (`06-plan-gate-permissions.md` §7, tests 1
+/// and 2): the planning turn is refused an edit, a write through the client
+/// and an attempt to leave plan mode — the script exits non-zero if any of
+/// them got through — and nothing changes until the plan is approved.
+#[test]
+fn a_plan_is_shown_and_nothing_runs_until_it_is_approved() {
+    let workspace = Workspace::new();
+    let script =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../eavery-core/tests/scripts/plan.json");
+    succeeds(&workspace.cli(&["project", "open", &path(&workspace.project_as_typed())]));
+
+    let printed = succeeds(&workspace.cli(&[
+        "run",
+        "--project",
+        &path(&workspace.project_as_typed()),
+        "--script",
+        &path(&script),
+        "--plan",
+        "--approve",
+        "yes",
+        "--edits",
+        "keep the heading as it is",
+        "rename FY25 to FY26",
+    ]));
+
+    assert!(printed.contains("turn     started (Planning)"), "{printed}");
+    assert!(printed.contains("plan     Update the report"), "{printed}");
+    assert!(printed.contains("1. Open report.txt"), "{printed}");
+    assert!(
+        printed.contains("sends    nothing leaves this computer"),
+        "{printed}"
+    );
+    assert!(
+        printed.contains("vendor   your documents are sent to local"),
+        "{printed}"
+    );
+    assert!(
+        printed.contains("answer   RejectOnce (by PlanGate)"),
+        "{printed}"
+    );
+    assert!(printed.contains("phase    AwaitingApproval"), "{printed}");
+    assert!(
+        printed.contains("approve  yes, with changes: keep the heading as it is"),
+        "{printed}"
+    );
+    assert!(printed.contains("phase    Executing"), "{printed}");
+    assert!(
+        printed.contains("answer   AllowOnce (by Policy)"),
+        "{printed}"
+    );
+    assert!(printed.contains("changed  report.txt"), "{printed}");
+    assert!(printed.contains("done     end_turn"), "{printed}");
+    assert_eq!(workspace.read("report.txt"), "FY26\n");
+}
+
+/// Nobody at the terminal, no `--approve`: the plan is shown and not carried
+/// out. A plan nobody read is never executed.
+#[test]
+fn a_plan_nobody_approves_runs_nothing() {
+    let workspace = Workspace::new();
+    let script =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../eavery-core/tests/scripts/plan.json");
+    succeeds(&workspace.cli(&["project", "open", &path(&workspace.project_as_typed())]));
+
+    let output = workspace.cli(&[
+        "run",
+        "--project",
+        &path(&workspace.project_as_typed()),
+        "--script",
+        &path(&script),
+        "--plan",
+        "rename FY25 to FY26",
+    ]);
+    let printed = stdout(&output);
+    assert_eq!(
+        output.status.code(),
+        Some(130),
+        "a turn that did not run ends as cancelled:\n{printed}"
+    );
+    assert!(printed.contains("plan     Update the report"), "{printed}");
+    assert!(printed.contains("no terminal to ask on"), "{printed}");
+    assert!(printed.contains("approve  no"), "{printed}");
+    assert!(printed.contains("done     plan_rejected"), "{printed}");
+    assert!(printed.contains("files    nothing changed"), "{printed}");
+    assert!(!printed.contains("phase    Executing"), "{printed}");
+    assert_eq!(workspace.read("report.txt"), "FY25\n");
+}
+
+/// §7, test 3: in the execute phase an edit inside the Project goes through
+/// on its own, an edit outside it is asked about, and so is anything that
+/// leaves the computer. With nobody to ask, both are refused.
+#[test]
+fn the_execute_phase_asks_about_what_undo_cannot_reach() {
+    let workspace = Workspace::new();
+    let outside = workspace.dir.path().join("elsewhere.txt");
+    let script = workspace.script(json!({
+        "initialize": { "agentInfo": {"name": "fake", "version": "0.0.1"}, "loadSession": false },
+        "session": {},
+        "turns": [
+            { "match": "write a plan", "actions": [
+                {"text": "```eavery-plan\n{\"summary\":\"Tidy up\",\"steps\":[\"Edit the report\"],\"outbound\":[\"Send the report to example.com\"]}\n```"},
+                {"stop": "end_turn"}
+            ]},
+            { "match": "approved this plan", "actions": [
+                {"request_permission": {"toolCallId": "t1", "title": "Edit report.txt",
+                                        "kind": "edit", "locations": ["{{cwd}}/report.txt"],
+                                        "expect": "allow_once"}},
+                {"request_permission": {"toolCallId": "t2", "title": "Edit elsewhere.txt",
+                                        "kind": "edit", "locations": [path(&outside)],
+                                        "expect": "reject_once"}},
+                {"request_permission": {"toolCallId": "t3", "title": "Send the report to example.com",
+                                        "kind": "fetch", "locations": [],
+                                        "expect": "reject_once"}},
+                {"text": "Done what I could."},
+                {"stop": "end_turn"}
+            ]}
+        ]
+    }));
+    succeeds(&workspace.cli(&["project", "open", &path(&workspace.project_as_typed())]));
+
+    let printed = succeeds(&workspace.cli(&[
+        "run",
+        "--project",
+        &path(&workspace.project_as_typed()),
+        "--script",
+        &path(&script),
+        "--plan",
+        "--approve",
+        "yes",
+        "tidy up",
+    ]));
+
+    assert!(
+        printed.contains("sends    Send the report to example.com"),
+        "{printed}"
+    );
+    assert!(
+        printed.contains("ask      Edit report.txt (Reversible)"),
+        "{printed}"
+    );
+    assert!(
+        printed.contains("ask      Edit elsewhere.txt (Destructive)"),
+        "{printed}"
+    );
+    assert!(
+        printed.contains("ask      Send the report to example.com (Outbound)"),
+        "{printed}"
+    );
+    assert!(
+        printed.contains("refused  Edit elsewhere.txt; Send the report to example.com"),
+        "{printed}"
+    );
+    assert!(
+        printed.contains("sent     nothing left this computer"),
+        "{printed}"
+    );
+}

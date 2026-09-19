@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!--
+  The application manifest the test binaries link with on Windows. It asks
+  for Common Controls version 6, the same as the manifest tauri-build embeds
+  in the app binary: `TaskDialogIndirect`, which the Wry runtime's dialogs
+  import, exists only in that version, and a binary without this manifest
+  is bound to version 5 and exits 0xc0000139 before it runs a line. See
+  `build.rs` and `docs/plan/CHANGELOG-plan.md`.
+-->
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <dependency>
+    <dependentAssembly>
+      <assemblyIdentity
+        type="win32"
+        name="Microsoft.Windows.Common-Controls"
+        version="6.0.0.0"
+        processorArchitecture="*"
+        publicKeyToken="6595b64144ccf1df"
+        language="*"
+      />
+    </dependentAssembly>
+  </dependency>
+</assembly>
