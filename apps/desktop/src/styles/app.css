@@ -397,6 +397,49 @@ select {
   flex: none;
 }
 
+/* The folder tree (M5-T04). Indentation is the only thing saying what is
+   inside what, so it is drawn with a rule rather than left to whitespace. */
+.doc-tree,
+.doc-children {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.doc-children {
+  margin-left: 0.55rem;
+  padding-left: 0.6rem;
+  border-left: 1px solid var(--line);
+}
+.doc-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.35rem;
+  width: 100%;
+  padding: 0.1rem 0;
+  text-align: left;
+}
+.doc-twist {
+  font-family: var(--mono);
+  color: var(--fg-muted);
+  width: 1em;
+  flex: none;
+}
+.doc-row .mark {
+  font-family: var(--mono);
+  width: 1em;
+  flex: none;
+}
+.doc-file .mark {
+  color: var(--accent);
+  font-weight: 600;
+}
+.doc-name {
+  overflow-wrap: anywhere;
+}
+.doc-folder > .doc-row .doc-name {
+  font-weight: 600;
+}
+
 /* ---- Transcript --------------------------------------------------------- */
 
 .transcript {

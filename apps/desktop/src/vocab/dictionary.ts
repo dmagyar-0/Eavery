@@ -121,6 +121,12 @@ export const dictionary = {
   showFolder: same("Show folder"),
   openDocument: same("Open"),
   changedLastRun: { everyday: "Changed in the last run", developer: "Changed by the last turn" },
+  removedLastRun: { everyday: "Removed in the last run", developer: "Removed by the last turn" },
+  folderEmpty: { everyday: "This folder is empty.", developer: "Nothing in the work tree." },
+  folderTooBigToList: {
+    everyday: "This folder holds more than the {count} documents shown here.",
+    developer: "Listing capped at {count} entries.",
+  },
   noChangesYet: { everyday: "Nothing has been changed yet.", developer: "No turn has changed anything yet." },
   noActivityYet: { everyday: "Nothing has happened yet.", developer: "No tool calls yet." },
   notProtectedWhy_too_large: { everyday: "too big", developer: "over the size limit" },
@@ -142,9 +148,10 @@ export const dictionary = {
     everyday: "Eavery says what it would do first. Nothing changes until you say go.",
     developer: "Plan phase under the plan gate, then approve, then execute.",
   },
-  askDirect: { everyday: "Ask", developer: "Run" },
+  askDirect: { everyday: "Ask a question", developer: "Run" },
   askDirectHint: {
-    everyday: "For a question. Eavery answers without a plan.",
+    everyday:
+      "For a question about your documents. Eavery reads and answers, and cannot change anything.",
     developer: "Direct mode: the execute prompt only. The policy still applies.",
   },
   planWaiting: { everyday: "Waiting for you to decide", developer: "Awaiting approval" },

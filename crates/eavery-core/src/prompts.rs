@@ -19,6 +19,11 @@ pub const PLAN: &str = include_str!("prompts/plan.md");
 /// optional `user_edits`.
 pub const EXECUTE: &str = include_str!("prompts/execute.md");
 
+/// The question prompt (§5, "Ask a question"). Variables: `project_root`,
+/// `request`. It says out loud that writes are shut, because an engine that
+/// learns this from a refusal spends a step finding out.
+pub const ASK: &str = include_str!("prompts/ask.md");
+
 /// What the plan prompt says when no Playbook applies. A `{{playbooks}}` left
 /// blank would read as a list that was cut off.
 pub const NO_PLAYBOOKS: &str = "(none)";
@@ -105,6 +110,17 @@ pub fn plan_prompt(project_root: &str, request: &str, playbooks: &[String]) -> S
             ("project_root", project_root.to_owned()),
             ("request", request.to_owned()),
             ("playbooks", playbooks),
+        ]),
+    )
+}
+
+/// The prompt for a question: read, answer, change nothing (§5).
+pub fn ask_prompt(project_root: &str, request: &str) -> String {
+    render(
+        ASK,
+        &HashMap::from([
+            ("project_root", project_root.to_owned()),
+            ("request", request.to_owned()),
         ]),
     )
 }

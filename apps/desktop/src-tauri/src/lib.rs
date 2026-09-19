@@ -55,6 +55,7 @@ pub fn register<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder
         commands::list_audit,
         commands::journal_size,
         commands::journal_info,
+        commands::list_documents,
         commands::unprotected_files,
         commands::get_settings,
         commands::set_settings,

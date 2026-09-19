@@ -146,7 +146,11 @@ const Row = memo(function Row({ block }: { block: Block }) {
           <strong>
             {developer
               ? t("errorGeneric", { code: block.code, message: block.message })
-              : t("errorGeneric", { next: block.nextAction ?? "" })}
+              : // §4, rule 2: the next action is the headline. An error that
+                // came without one still has to say something — "That didn't
+                // work." on its own leaves the person with nowhere to go — so
+                // the message stands in for it.
+                t("errorGeneric", { next: block.nextAction ?? block.message })}
           </strong>
           {developer && block.nextAction ? <span className="muted">{block.nextAction}</span> : null}
         </div>

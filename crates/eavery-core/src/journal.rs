@@ -122,7 +122,7 @@ pub enum JournalError {
 }
 
 impl JournalError {
-    fn io(path: impl Into<PathBuf>, source: std::io::Error) -> Self {
+    pub(crate) fn io(path: impl Into<PathBuf>, source: std::io::Error) -> Self {
         JournalError::Io {
             path: path.into(),
             source,
@@ -798,7 +798,7 @@ pub fn scan_project(root: &Path) -> Result<ProjectScan, JournalError> {
 /// the state folders engines keep beside the work. These are the entries of
 /// the exclude list that are whole directories, and skipping them here is what
 /// keeps a scan of a developer's folder from taking a minute.
-const SKIPPED_DIRS: &[&str] = &[
+pub(crate) const SKIPPED_DIRS: &[&str] = &[
     ".git",
     "node_modules",
     ".claude",

@@ -13,6 +13,7 @@ import type {
   Checkpoint,
   Decision,
   Diagnostics,
+  DocumentTree,
   EngineListing,
   EngineStatus,
   JournalInfo,
@@ -22,14 +23,17 @@ import type {
   Settings,
   StoredEvent,
   Turn,
+  TurnMode,
   Unprotected,
 } from "./types";
 
 /**
- * Which loop a turn runs (`06-plan-gate-permissions.md` §1 and §5): `plan`
- * is plan → approve → execute; `direct` sends only the execute prompt.
+ * Which loop a turn runs (`06-plan-gate-permissions.md` §1 and §5): `plan` is
+ * plan → approve → execute, `direct` sends only the execute prompt, and `ask`
+ * is a question that is not allowed to change anything. Generated from the
+ * Rust enum, and re-exported here because this is the surface that uses it.
  */
-export type TurnMode = "direct" | "plan";
+export type { TurnMode };
 
 /**
  * Every command fails as an `AppError`: a code, a message, and — usually —
@@ -154,6 +158,10 @@ export const journalInfo = (projectId: string) =>
 
 export const unprotectedFiles = (projectId: string) =>
   invoke<Unprotected[]>("unprotected_files", { projectId });
+
+/** The Project folder for the Documents pane: names and paths, no contents. */
+export const listDocuments = (projectId: string) =>
+  invoke<DocumentTree>("list_documents", { projectId });
 
 // ---- settings --------------------------------------------------------------
 

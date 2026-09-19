@@ -1748,3 +1748,134 @@ async fn a_turn_does_not_run_when_the_folder_cannot_be_protected() {
     assert!(!kinds.contains(&"agent_text".to_owned()));
     assert!(runner.running_turn().is_none(), "and the Project is free");
 }
+
+// ---- questions (§5) --------------------------------------------------------
+
+#[tokio::test]
+async fn a_question_reads_answers_and_may_not_change_anything() {
+    let fixture = Fixture::new();
+    let report = fixture.path("report.txt");
+    let engine = TestEngine::with_modes(
+        vec![vec![
+            Act::Ask(read_of("Read report.txt")),
+            // The engine tries to edit anyway. Nothing about a question
+            // invites this, which is the point: the guarantee cannot rest on
+            // the engine behaving.
+            Act::Ask(edit_of(&report)),
+            Act::Text("The cover says FY25."),
+        ]],
+        &["default", "plan", "acceptEdits"],
+        "default",
+    );
+    // The standing answer is "allow": if the edit is still refused, it was
+    // refused by the gate and not by a user who happened to say no.
+    let runner = fixture
+        .runner_with(
+            Arc::clone(&engine),
+            Decision::AllowOnce,
+            &planning_facts(),
+            &ConnectorRegistry::default(),
+        )
+        .await;
+
+    let outcome = runner
+        .run_turn_in(TurnMode::Ask, "Which year is on the cover?")
+        .await
+        .unwrap();
+
+    assert_eq!(outcome.turn.phase, TurnPhase::Done);
+    assert_eq!(outcome.stop_reason, StopReason::EndTurn);
+
+    // One prompt — there is no execute phase to follow — and it is the
+    // question prompt, carrying the question.
+    let prompts = engine.prompts();
+    assert_eq!(prompts.len(), 1, "a question is one prompt");
+    assert!(
+        prompts[0].contains("Which year is on the cover?"),
+        "{}",
+        prompts[0]
+    );
+    assert!(prompts[0].contains("change nothing"), "{}", prompts[0]);
+    assert!(
+        !prompts[0].contains("approved this plan"),
+        "a question is not an execute prompt: {}",
+        prompts[0]
+    );
+
+    // The engine's read-only mode was selected, and writes were shut for the
+    // whole of it and opened again on the way out.
+    assert_eq!(engine.modes_set(), vec!["plan"]);
+    assert_eq!(engine.writes_allowed(), vec![false, true]);
+
+    // The gate answered both requests: the read through, the edit refused,
+    // and the person was never asked.
+    assert_eq!(
+        engine.answers(),
+        vec![
+            ("Read report.txt".to_owned(), Decision::AllowOnce),
+            (format!("Edit {}", report.display()), Decision::RejectOnce),
+        ]
+    );
+    assert!(
+        fixture.seen.asked().is_empty(),
+        "a question never interrupts the person"
+    );
+    assert_eq!(
+        outcome.digest.refused_actions,
+        vec![format!("Edit {}", report.display())],
+        "and what it refused is on the record"
+    );
+
+    // Nothing changed, which is the whole promise.
+    assert!(outcome.digest.files_added.is_empty());
+    assert!(outcome.digest.files_changed.is_empty());
+    assert!(outcome.digest.files_removed.is_empty());
+
+    // The decision was written down as the question's, not the plan's.
+    let audit = fixture
+        .store
+        .list_audit(Some(fixture.project.id), Some(50))
+        .unwrap();
+    let phases: Vec<String> = audit
+        .iter()
+        .filter_map(|row| row.detail.get("phase")?.as_str().map(str::to_owned))
+        .collect();
+    assert!(
+        phases.iter().all(|phase| phase == "asking"),
+        "the audit says which phase refused: {phases:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_question_that_writes_behind_the_gate_is_reported_and_still_protected() {
+    let fixture = Fixture::new();
+    let engine = TestEngine::with_modes(
+        vec![vec![
+            // No permission request at all: the engine simply writes, the way
+            // one that ignores its own read-only mode would.
+            Act::Write("report.txt", "FY26\n"),
+            Act::Text("Done."),
+        ]],
+        &["default", "plan"],
+        "default",
+    );
+    let runner = fixture
+        .runner_with(
+            Arc::clone(&engine),
+            Decision::RejectOnce,
+            &planning_facts(),
+            &ConnectorRegistry::default(),
+        )
+        .await;
+
+    let outcome = runner
+        .run_turn_in(TurnMode::Ask, "Which year is on the cover?")
+        .await
+        .unwrap();
+
+    // The Journal caught it, so the person can still take it back — a
+    // question that changed something is a bug in the engine, not a reason
+    // to lose the change silently.
+    assert_eq!(outcome.digest.files_changed, vec!["report.txt"]);
+    assert!(outcome.digest.undo_to.is_some(), "and it is still undoable");
+}

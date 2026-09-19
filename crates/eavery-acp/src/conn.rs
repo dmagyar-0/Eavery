@@ -27,10 +27,12 @@ use tokio::sync::{Mutex, mpsc, oneshot};
 /// before the message that matters.
 const STDERR_RING: usize = 200;
 
-/// How long the waiter gives the stderr reader to finish after the child exits.
-/// Without it a crash report races the drain and arrives empty, which is the
-/// one moment stderr is worth having.
-const STDERR_DRAIN_GRACE: Duration = Duration::from_secs(1);
+/// How long the waiter gives both readers to finish after the child exits.
+/// Without it a crash report races the drain and arrives empty — the one
+/// moment stderr is worth having — and the engine's last message races the
+/// news of its death, so the transcript shows the crash without the words
+/// that led to it.
+const DRAIN_GRACE: Duration = Duration::from_secs(1);
 
 pub const METHOD_NOT_FOUND: i64 = -32601;
 /// The implementation-defined code Eavery uses for "refused by Eavery", such as
@@ -206,14 +208,15 @@ impl Connection {
             exited: Mutex::new(Some(exited_rx)),
         };
 
-        let (drained_tx, drained_rx) = oneshot::channel();
+        let (stderr_drained_tx, stderr_drained_rx) = oneshot::channel();
+        let (stdout_drained_tx, stdout_drained_rx) = oneshot::channel();
 
         tokio::spawn(write_loop(stdin, outgoing_rx, spec.engine_id.clone()));
         tokio::spawn(stderr_loop(
             child_stderr,
             Arc::clone(&stderr),
             spec.engine_id.clone(),
-            drained_tx,
+            stderr_drained_tx,
         ));
         tokio::spawn(read_loop(
             stdout,
@@ -222,13 +225,15 @@ impl Connection {
             outgoing,
             handler,
             notifications,
+            stdout_drained_tx,
         ));
         tokio::spawn(wait_loop(WaitLoop {
             engine_id: spec.engine_id.clone(),
             child,
             shutdown: shutdown_rx,
             exited: exited_tx,
-            drained: drained_rx,
+            stderr_drained: stderr_drained_rx,
+            stdout_drained: stdout_drained_rx,
             pending,
             stderr,
         }));
@@ -364,6 +369,7 @@ async fn read_loop(
     outgoing: mpsc::UnboundedSender<String>,
     handler: Arc<dyn ClientHandler>,
     notifications: NotificationSink,
+    drained: oneshot::Sender<()>,
 ) {
     let mut lines = BufReader::new(stdout).lines();
     while let Ok(Some(line)) = lines.next_line().await {
@@ -433,6 +439,11 @@ async fn read_loop(
         }
     }
     tracing::debug!(engine = %engine_id, "engine closed its stdout");
+    // EOF on stdout: the engine has said everything it is going to.
+    // The waiter holds off failing the pending requests until this
+    // fires, so a reply already in the pipe is delivered rather than
+    // overtaken by the news that the process is gone.
+    let _ = drained.send(());
 }
 
 struct WaitLoop {
@@ -441,7 +452,9 @@ struct WaitLoop {
     shutdown: oneshot::Receiver<()>,
     exited: oneshot::Sender<()>,
     /// Fires when the stderr reader reaches EOF.
-    drained: oneshot::Receiver<()>,
+    stderr_drained: oneshot::Receiver<()>,
+    /// Fires when the stdout reader reaches EOF.
+    stdout_drained: oneshot::Receiver<()>,
     pending: PendingRequests,
     stderr: Arc<Mutex<VecDeque<String>>>,
 }
@@ -460,7 +473,8 @@ async fn wait_loop(loop_state: WaitLoop) {
         mut child,
         shutdown,
         exited,
-        drained,
+        stderr_drained,
+        stdout_drained,
         pending,
         stderr,
     } = loop_state;
@@ -480,9 +494,20 @@ async fn wait_loop(loop_state: WaitLoop) {
         Some(status) => format!("the engine exited with {status}"),
         None => "the engine exited".to_owned(),
     };
-    // The child is gone but its stderr may still be sitting in a pipe buffer.
-    // Whoever is about to be told the engine crashed wants those lines.
-    let _ = tokio::time::timeout(STDERR_DRAIN_GRACE, drained).await;
+    // The child is gone but both its pipes may still hold buffered output.
+    //
+    // stderr matters because whoever is about to be told the engine crashed
+    // wants the lines that explain it. stdout matters more: an engine that
+    // says something and exits in the same breath — a crash right after a
+    // last message — writes both, and failing the pending requests before
+    // the reader has parsed that message loses it. The transcript would then
+    // show the crash and not the words that came before it, which is the one
+    // thing someone reading it afterwards needs.
+    let _ = tokio::time::timeout(
+        DRAIN_GRACE,
+        futures::future::join(stderr_drained, stdout_drained),
+    )
+    .await;
 
     let tail = stderr.lock().await.iter().cloned().collect::<Vec<_>>();
     if !tail.is_empty() {

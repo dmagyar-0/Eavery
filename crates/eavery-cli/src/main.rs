@@ -100,6 +100,11 @@ pub struct RunArgs {
     #[arg(long)]
     pub plan: bool,
 
+    /// Ask a question: the engine reads and answers, and is not allowed to
+    /// change anything (`06-plan-gate-permissions.md` §5).
+    #[arg(long, conflicts_with = "plan")]
+    pub ask: bool,
+
     /// Answer the plan this way instead of asking. Without it, the plan is
     /// put to the terminal; with no terminal attached, it is rejected.
     #[arg(long, value_parser = ["yes", "no"], requires = "plan")]
