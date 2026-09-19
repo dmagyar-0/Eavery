@@ -15,7 +15,7 @@
 //
 // Run: `node scripts/check-vocab.mjs` (or `pnpm check-vocab` in apps/desktop).
 
-import { readdirSync, statSync } from "node:fs";
+import { readFileSync, readdirSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -109,7 +109,7 @@ function isCodeNotCopy(node) {
 const findings = [];
 
 for (const file of SCANNED.flatMap(sources)) {
-  const text = require("node:fs").readFileSync(file, "utf8");
+  const text = readFileSync(file, "utf8");
   const source = ts.createSourceFile(file, text, ts.ScriptTarget.ES2022, true, ts.ScriptKind.TSX);
 
   const look = (node, value) => {
@@ -157,7 +157,7 @@ for (const file of SCANNED.flatMap(sources)) {
 const dictionaryFile = path.join(app, "src", "vocab", "dictionary.ts");
 const dictionarySource = ts.createSourceFile(
   dictionaryFile,
-  require("node:fs").readFileSync(dictionaryFile, "utf8"),
+  readFileSync(dictionaryFile, "utf8"),
   ts.ScriptTarget.ES2022,
   true,
   ts.ScriptKind.TS,
